@@ -41,7 +41,7 @@ Options:
   -h, --help             Print help
 
 Prefers `facet request run` against docs/examples/typesafe (selector
-items/0/items/0). Key stays in Facet env. Named asks only — no weekday clocks.
+items/0/items/0). Key stays in Facet env. Named asks only — no grind clocks.
 ";
 
 /// Shipped System One questions (Choice + Noul).

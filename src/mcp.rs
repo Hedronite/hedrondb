@@ -114,7 +114,7 @@ fn initialize_result(params: &Value) -> Value {
             "HedronDB: local-first named intent store. ",
             "jev_intent is a shadow Jev gate (Facet TypeSafe recipe) over ",
             "{intent, evidence_digest}. Low confidence → escalate; never auto-apply. ",
-            "Named asks only — no weekday grind clocks. ",
+            "Named asks only; do not schedule grind clocks. ",
             "Hydrate typesafeApiKey via facet env set --secret (TYPESAFE_API_KEY), never fixtures. ",
             "empty/ask/escalate/hold ≠ approve."
         ),
@@ -201,7 +201,9 @@ mod tests {
         assert!(text.contains("jev_intent"));
         assert!(text.contains("named"));
         assert!(!text.to_ascii_lowercase().contains("duha"));
-        assert!(!text.to_ascii_lowercase().contains("weekday"));
+        assert!(!text.to_ascii_lowercase().contains("asr"));
+        assert!(!text.to_ascii_lowercase().contains("maghrib"));
+        assert!(!text.to_ascii_lowercase().contains("cron"));
 
         let list = handle(&json!({
             "jsonrpc": "2.0",

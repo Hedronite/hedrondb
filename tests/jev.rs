@@ -57,7 +57,9 @@ fn jev_intent_help() {
     assert!(stdout.contains("--evidence-digest"));
     assert!(stdout.contains("never writes"));
     assert!(!stdout.to_ascii_lowercase().contains("duha"));
-    assert!(!stdout.to_ascii_lowercase().contains("weekday"));
+    assert!(!stdout.to_ascii_lowercase().contains("asr"));
+    assert!(!stdout.to_ascii_lowercase().contains("maghrib"));
+    assert!(!stdout.to_ascii_lowercase().contains("cron"));
 }
 
 #[test]

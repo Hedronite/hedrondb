@@ -23,7 +23,7 @@ Options:
 
 `hedron-import` is a thin alias of `hedron import`.
 Python `python/hql` is a result-twin of `hedron hql`.
-Jev is named asks only — no weekday grind clocks.
+Jev is named asks only — no grind clocks.
 ";
 
 fn main() {
