@@ -8,11 +8,14 @@ mod contracts;
 mod error;
 pub mod hql;
 pub mod import;
+pub mod jev;
+pub mod mcp;
 pub mod reconcile;
 mod store;
 mod types;
 
 pub use error::{Error, Result};
+pub use jev::{ask, Choice, Decision, Transport};
 pub use reconcile::{DocsEod, Observation, Reconciler, DOCS_EOD_KIND};
 pub use store::{Store, SCHEMA_SQL};
 pub use types::{

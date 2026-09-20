@@ -70,6 +70,8 @@ fn hedron_root_help() {
     assert!(out.status.success());
     assert!(stdout.contains("import"));
     assert!(stdout.contains("hql"));
+    assert!(stdout.contains("jev-intent"));
+    assert!(stdout.contains("mcp"));
 }
 
 #[test]

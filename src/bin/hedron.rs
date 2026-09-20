@@ -1,9 +1,10 @@
-//! Product CLI: `hedron import` and `hedron hql`. No daemon, no listen port.
+//! Product CLI: `hedron import`, `hedron hql`, `hedron jev-intent`, `hedron mcp`.
+//! No daemon, no listen port.
 
 use std::env;
 use std::process;
 
-use hedron_core::{hql, import};
+use hedron_core::{hql, import, jev, mcp};
 
 const ROOT_HELP: &str = "\
 HedronDB product CLI.
@@ -12,14 +13,17 @@ Usage:
   hedron <COMMAND> [OPTIONS]
 
 Commands:
-  import  Load a markdown tree into a HedronDB store
-  hql     Run a read-only HQL v0 pipeline
+  import      Load a markdown tree into a HedronDB store
+  hql         Run a read-only HQL v0 pipeline
+  jev-intent  Named-ask Jev gate: intent vs evidence (shadow)
+  mcp         MCP stdio server (`jev_intent`)
 
 Options:
   -h, --help  Print help
 
 `hedron-import` is a thin alias of `hedron import`.
 Python `python/hql` is a result-twin of `hedron hql`.
+Jev is named asks only — no weekday grind clocks.
 ";
 
 fn main() {
@@ -42,6 +46,8 @@ fn run(mut args: Vec<String>) -> Result<(), String> {
         }
         "import" => import::run_cli(args),
         "hql" => hql::run_cli(args),
+        "jev-intent" => jev::run_cli(args),
+        "mcp" => mcp::run_cli(args),
         other => Err(format!(
             "unknown command {other:?}\n\nRun `hedron --help` for usage."
         )),

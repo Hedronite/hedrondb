@@ -12,6 +12,7 @@ pub enum Error {
     Invalid(String),
     Sqlite(rusqlite::Error),
     Yaml(serde_yaml::Error),
+    Json(serde_json::Error),
     Io(std::io::Error),
 }
 
@@ -26,6 +27,7 @@ impl fmt::Display for Error {
             Error::Invalid(msg) => write!(f, "{msg}"),
             Error::Sqlite(err) => write!(f, "sqlite: {err}"),
             Error::Yaml(err) => write!(f, "yaml: {err}"),
+            Error::Json(err) => write!(f, "json: {err}"),
             Error::Io(err) => write!(f, "io: {err}"),
         }
     }
@@ -42,6 +44,12 @@ impl From<rusqlite::Error> for Error {
 impl From<serde_yaml::Error> for Error {
     fn from(err: serde_yaml::Error) -> Self {
         Error::Yaml(err)
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(err: serde_json::Error) -> Self {
+        Error::Json(err)
     }
 }
 
