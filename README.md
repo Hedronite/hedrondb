@@ -85,6 +85,8 @@ hedron hql --db ./intent.db --format json 'vault my-vault | search "HedronDB" | 
 
 - **`hedron import`** — walk a markdown tree into the store (wikilinks become `mentions`; unresolved targets are allowed).
 - **`hedron hql`** — operators `vault`, `agent`, `state [NAME]`, `history [NAME]`, `search`, `traverse`, `filter`, `select`, `limit`. Unknown operators (including `causal`) are rejected.
+- **`hedron jev-intent`** — named-ask Jev gate: Choice `{apply, wait, escalate, ignore}` on `{intent, evidence_digest}` (shadow; never writes). See [docs/jev-native.md](docs/jev-native.md).
+- **`hedron mcp`** — stdio MCP with `jev_intent` (same JSON as the CLI).
 - **`hedron-import`** — thin alias of `hedron import`. Prefer `hedron import`.
 - **Rust/Python result twin** — `cargo test --test hql_twin` compares `hedron hql --format json` with `python3 -m hql`.
 
@@ -117,7 +119,7 @@ Facet and HedronDB answer different questions. Facet: what did we call, and what
 | Query | `facet history` (SQL over runs) | `hedron hql` pipes |
 | Binary | `facet` | `hedron` |
 
-Neither product embeds the other. Wire them with a small CLI or MCP tool, scoped to a file and vault.
+Neither product embeds the other. Wire them with a small CLI or MCP tool, scoped to a file and vault. `hedron jev-intent` calls Facet's TypeSafe / System One recipe for a named apply-or-escalate ask; Jev does not write the SQLite file.
 
 ## A real run
 
@@ -202,11 +204,12 @@ One file, two query paths, no network.
 
 ```
 src/                  # hedron-core + hedron / hedron-import binaries
-tests/                # phase0, cli, hql, import, hql_twin
+tests/                # phase0, cli, hql, import, hql_twin, jev
 python/hql/           # sqlite3 + PyYAML result-twin (read-only)
 schema.sql            # the one CREATE TABLE source
 assets/               # product mark
 docs/HQL.md           # query language
+docs/jev-native.md    # named-ask Jev gate (shadow)
 .github/workflows/    # ci.yml, nightly.yml
 ```
 
@@ -219,6 +222,7 @@ Phase 0 is the working tree at **0.1.0**; track `main`.
 - **Store / vaults / named desired states / causal log:** ready.
 - **HQL v0 + Python twin:** ready.
 - **Import:** ready.
+- **Jev named ask (`jev-intent` / MCP):** shadow spike. Low confidence escalates; Jev never writes rows. No weekday grind clocks.
 - **Not in this repo:** HTTP service, SQL as the query language, embeddings, a UI, or a cluster control plane.
 
 CI (`ubuntu-latest`, rustc 1.83) runs `cargo test` and a release build of `hedron`. The Python twin needs `pyyaml` (`python3 -m pip install --user pyyaml`).

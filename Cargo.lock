@@ -134,6 +134,7 @@ dependencies = [
  "indexmap",
  "rusqlite",
  "serde",
+ "serde_json",
  "serde_yaml",
  "uuid",
 ]
@@ -170,6 +171,13 @@ dependencies = [
  "pkg-config",
  "vcpkg",
 ]
+
+
+[[package]]
+name = "memchr"
+version = "2.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "once_cell"
@@ -239,6 +247,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+
+[[package]]
+name = "serde_json"
+version = "1.0.140"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20068b6e96dc6c9bd23e01df8827e6c7e1f2fddd43c21810382803c136b99373"
+dependencies = [
+ "itoa",
+ "memchr",
+ "ryu",
+ "serde",
 ]
 
 [[package]]

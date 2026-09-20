@@ -1,0 +1,76 @@
+# HedronDB Jev intent-vs-evidence (Facet TypeSafe recipe). Transport SoT:
+# Facet docs/examples/typesafe. Hydrate typesafeApiKey via `facet env set --secret`
+# from $TYPESAFE_API_KEY. Never bake a key here or in HedronDB fixtures / vault notes.
+# jevShadow=true is classify-only: Jev never writes desired_states or events.
+opencollection: 1.0.0
+info:
+  name: TypeSafe Jev (HedronDB intent)
+  summary: Named-ask intent vs evidence Choice via Facet System One. Secret typesafeApiKey from Facet env — never YAML/fixtures.
+  version: 0.1.0
+bundled: true
+config:
+  environments:
+    - name: typesafe
+      variables:
+        - name: typesafeApi
+          value: https://api.typesafe.ai
+        - secret: true
+          name: typesafeApiKey
+          type: string
+        - name: jevModel
+          value: jev-latest
+        - name: state
+          value: "hedron jev-intent: should this named intent apply given the evidence digest?"
+        - name: jevShadow
+          value: "true"
+items:
+  - info:
+      name: System One
+      type: folder
+      seq: 1
+    items:
+      - info:
+          name: Intent vs evidence
+          type: http
+          seq: 1
+        http:
+          method: POST
+          url: "{{typesafeApi}}/v1/systemone"
+          headers:
+            - name: Authorization
+              value: "Bearer {{typesafeApiKey}}"
+            - name: Content-Type
+              value: application/json
+            - name: Accept
+              value: application/json
+          body:
+            type: json
+            data: |-
+              {
+                "state": "{{state}}",
+                "model": "{{jevModel}}",
+                "questions": {
+                  "apply": {
+                    "type": "choice",
+                    "instructions": "Given this named intent and evidence digest, what should HedronDB do? Shadow only — do not write rows.",
+                    "criteria": {
+                      "apply": "Evidence matches the intent; a human may apply later. Not a write grant.",
+                      "wait": "Evidence is incomplete or stale; do not apply yet",
+                      "escalate": "Ambiguous, conflicting, or high-stakes — need a human",
+                      "ignore": "Noise, duplicate, or unrelated to this named intent"
+                    }
+                  },
+                  "sufficient": {
+                    "type": "noul",
+                    "instructions": "Is the evidence digest sufficient to consider applying this intent?",
+                    "criteria": {
+                      "true": "The digest identifies concrete, relevant evidence for the intent",
+                      "false": "The digest is empty, generic, or does not speak to the intent"
+                    }
+                  }
+                }
+              }
+        settings:
+          timeout: 30000
+          followRedirects: true
+          maxRedirects: 0
