@@ -36,6 +36,9 @@
 
 ---
 
+> **Status:** In production use as daily-driver / dogfood local-first intent store (desired state + causal log + HQL). Hardening: Phase 0 at 0.1.0; no HTTP service or cluster control plane in this repo. Not a toy reference.
+
+
 HedronDB is a local-first knowledge store for software agents. It records **what should be true** (desired state) and **what happened** (an append-only causal log), then lets you query both without a hosted control plane.
 
 One binary, `hedron`. One file, SQLite. Mutations go through an in-process store with vault isolation and short-lived tokens. Reads can go through **HQL**, a small pipe language that never writes.
