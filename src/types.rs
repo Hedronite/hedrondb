@@ -189,6 +189,58 @@ pub struct DocsEodSpec {
     pub required_briefs: Vec<String>,
 }
 
+/// Expected path counts for `kind: curriculum_clock`.
+/// Freeze key is `ship_note` (LapisObserveEmit / ObserveResult).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CurriculumExpected {
+    pub quiz_html: u64,
+    pub lab_refs: u64,
+    pub ship_note: u64,
+}
+
+/// One vault-relative path the clock requires, with its count role.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CurriculumPath {
+    pub path: String,
+    pub role: String,
+}
+
+/// Optional globs, one pattern per role. `*` stays in a segment; `**` crosses `/`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct CurriculumGlobs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quiz_html: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lab_refs: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ship_note: Option<String>,
+}
+
+impl CurriculumGlobs {
+    pub fn is_empty(&self) -> bool {
+        self.quiz_html.is_none() && self.lab_refs.is_none() && self.ship_note.is_none()
+    }
+}
+
+/// `kind: curriculum_clock` spec body. `kind` is read by the dispatcher.
+///
+/// `check_at` is stored for a later derived pending-vs-gap view. Observe does
+/// not read the wall clock. Sibling store file for a Maghrib day is
+/// `maghrib-YYYY-MM-DD.db` (mode 0600); never overwrite an `eod-*.db`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CurriculumClockSpec {
+    pub date: String,
+    pub clock: String,
+    pub expected: CurriculumExpected,
+    #[serde(default)]
+    pub required_paths: Vec<CurriculumPath>,
+    #[serde(default, skip_serializing_if = "CurriculumGlobs::is_empty")]
+    pub globs: CurriculumGlobs,
+    /// ISO date-time. Not compared to the host clock in observe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_at: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DesiredState {
     pub id: Uuid,
@@ -218,6 +270,47 @@ impl DesiredState {
                 serde_yaml::Value::String(crate::reconcile::DOCS_EOD_KIND.into()),
             );
         }
+        Ok(spec)
+    }
+
+    /// A `kind: curriculum_clock` spec. Path/count only — no secrets, no grades.
+    /// `required_paths` entries are `(path, role)` with role
+    /// `quiz_html` | `lab_refs` | `ship_note`. Role counts must match `expected`.
+    pub fn curriculum_clock_spec(
+        date: &str,
+        clock: &str,
+        quiz_html: u64,
+        lab_refs: u64,
+        ship_note: u64,
+        required_paths: &[(&str, &str)],
+        check_at: Option<&str>,
+    ) -> Result<serde_yaml::Value> {
+        let body = CurriculumClockSpec {
+            date: date.to_string(),
+            clock: clock.to_string(),
+            expected: CurriculumExpected {
+                quiz_html,
+                lab_refs,
+                ship_note,
+            },
+            required_paths: required_paths
+                .iter()
+                .map(|(path, role)| CurriculumPath {
+                    path: (*path).to_string(),
+                    role: (*role).to_string(),
+                })
+                .collect(),
+            globs: CurriculumGlobs::default(),
+            check_at: check_at.map(str::to_string),
+        };
+        let mut spec = serde_yaml::to_value(body)?;
+        if let Some(map) = spec.as_mapping_mut() {
+            map.insert(
+                serde_yaml::Value::String("kind".into()),
+                serde_yaml::Value::String(crate::reconcile::CURRICULUM_CLOCK_KIND.into()),
+            );
+        }
+        crate::reconcile::parse_curriculum_clock_spec(&spec)?;
         Ok(spec)
     }
 }
