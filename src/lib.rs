@@ -16,9 +16,13 @@ mod types;
 
 pub use error::{Error, Result};
 pub use jev::{ask, Choice, Decision, Transport};
-pub use reconcile::{DocsEod, Observation, Reconciler, DOCS_EOD_KIND};
+pub use reconcile::{
+    adapt_lapis_observe, CurriculumClock, DocsEod, Observation, Reconciler, CURRICULUM_CLOCK_KIND,
+    DOCS_EOD_KIND,
+};
 pub use store::{Store, SCHEMA_SQL};
 pub use types::{
-    Bootstrap, Condition, ConditionKind, DesiredState, DocsEodSpec, Edge, Event, Node, NodeType,
-    Status, Tier, CAUSAL_CAUSED_BY, CAUSAL_RECONCILES, CAUSAL_SUPERSEDES, EDGE_GRANT,
+    Bootstrap, Condition, ConditionKind, CurriculumClockSpec, CurriculumExpected, CurriculumGlobs,
+    CurriculumPath, DesiredState, DocsEodSpec, Edge, Event, Node, NodeType, Status, Tier,
+    CAUSAL_CAUSED_BY, CAUSAL_RECONCILES, CAUSAL_SUPERSEDES, EDGE_GRANT,
 };
