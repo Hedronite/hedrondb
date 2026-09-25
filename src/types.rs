@@ -196,6 +196,9 @@ pub struct CurriculumExpected {
     pub quiz_html: u64,
     pub lab_refs: u64,
     pub ship_note: u64,
+    /// Lattice-visible lesson markdown. Absent on older specs, which means 0.
+    #[serde(default)]
+    pub lesson_md: u64,
 }
 
 /// One vault-relative path the clock requires, with its count role.
@@ -214,11 +217,16 @@ pub struct CurriculumGlobs {
     pub lab_refs: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ship_note: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lesson_md: Option<String>,
 }
 
 impl CurriculumGlobs {
     pub fn is_empty(&self) -> bool {
-        self.quiz_html.is_none() && self.lab_refs.is_none() && self.ship_note.is_none()
+        self.quiz_html.is_none()
+            && self.lab_refs.is_none()
+            && self.ship_note.is_none()
+            && self.lesson_md.is_none()
     }
 }
 
@@ -275,7 +283,9 @@ impl DesiredState {
 
     /// A `kind: curriculum_clock` spec. Path/count only — no secrets, no grades.
     /// `required_paths` entries are `(path, role)` with role
-    /// `quiz_html` | `lab_refs` | `ship_note`. Role counts must match `expected`.
+    /// `quiz_html` | `lab_refs` | `ship_note` | `lesson_md`.
+    /// Role counts must match `expected`. `lesson_md` is 0; use [`Self::lesson_clock`]
+    /// when the lane counts lesson markdown.
     pub fn curriculum_clock_spec(
         date: &str,
         clock: &str,
@@ -285,15 +295,31 @@ impl DesiredState {
         required_paths: &[(&str, &str)],
         check_at: Option<&str>,
     ) -> Result<serde_yaml::Value> {
+        Self::lesson_clock(LessonClockSpec {
+            date,
+            clock,
+            quiz_html,
+            lab_refs,
+            ship_note,
+            lesson_md: 0,
+            required_paths,
+            check_at,
+        })
+    }
+
+    /// Same spec as [`Self::curriculum_clock_spec`], with an explicit `lesson_md` count.
+    pub fn lesson_clock(input: LessonClockSpec<'_>) -> Result<serde_yaml::Value> {
         let body = CurriculumClockSpec {
-            date: date.to_string(),
-            clock: clock.to_string(),
+            date: input.date.to_string(),
+            clock: input.clock.to_string(),
             expected: CurriculumExpected {
-                quiz_html,
-                lab_refs,
-                ship_note,
+                quiz_html: input.quiz_html,
+                lab_refs: input.lab_refs,
+                ship_note: input.ship_note,
+                lesson_md: input.lesson_md,
             },
-            required_paths: required_paths
+            required_paths: input
+                .required_paths
                 .iter()
                 .map(|(path, role)| CurriculumPath {
                     path: (*path).to_string(),
@@ -301,7 +327,7 @@ impl DesiredState {
                 })
                 .collect(),
             globs: CurriculumGlobs::default(),
-            check_at: check_at.map(str::to_string),
+            check_at: input.check_at.map(str::to_string),
         };
         let mut spec = serde_yaml::to_value(body)?;
         if let Some(map) = spec.as_mapping_mut() {
@@ -313,6 +339,19 @@ impl DesiredState {
         crate::reconcile::parse_curriculum_clock_spec(&spec)?;
         Ok(spec)
     }
+}
+
+/// Inputs for [`DesiredState::lesson_clock`].
+#[derive(Debug, Clone, Copy)]
+pub struct LessonClockSpec<'a> {
+    pub date: &'a str,
+    pub clock: &'a str,
+    pub quiz_html: u64,
+    pub lab_refs: u64,
+    pub ship_note: u64,
+    pub lesson_md: u64,
+    pub required_paths: &'a [(&'a str, &'a str)],
+    pub check_at: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
