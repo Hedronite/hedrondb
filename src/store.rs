@@ -5,9 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use uuid::Uuid;
 
-use crate::error::{Error, Result};
 use crate::contracts::validate_spec_shape;
-use crate::reconcile::reconciler_for;
+use crate::error::{Error, Result};
+use crate::reconcile::{adapt_lapis_observe, reconciler_for, CURRICULUM_CLOCK_KIND};
 use crate::types::{
     content_hash, desired_state_hash, is_causal_type, reject_secrets, validate_importance,
     version_ref, Bootstrap, DesiredState, Edge, Event, Node, NodeType, Status, Tier,
@@ -298,6 +298,58 @@ impl Store {
         Ok((ds, event))
     }
 
+    /// Reconcile a `curriculum_clock` desired state from an in-memory emit.
+    ///
+    /// Same writes as [`Store::reconcile`] (status, version, `Reconciled`
+    /// event, causal edges). Facts come from [`adapt_lapis_observe`], not from
+    /// vault documents, so lattice rows are not ingested. `caused_by` is empty:
+    /// lattice rows have no HedronDB ids. The event `data` still carries
+    /// `present` / `missing` / `counts`, with `missing` recomputed by the
+    /// reconciler.
+    pub fn reconcile_observed(
+        &mut self,
+        token: &str,
+        desired_state_id: Uuid,
+        emit: &serde_yaml::Value,
+    ) -> Result<(DesiredState, Event)> {
+        let session = self.auth(token)?.clone();
+        let mut ds = self.load_desired_state(desired_state_id)?;
+        self.ensure_access(&session, ds.vault_id)?;
+        let kind = ds.spec.get("kind").and_then(serde_yaml::Value::as_str);
+        if kind != Some(CURRICULUM_CLOCK_KIND) {
+            return Err(Error::Invalid(
+                "reconcile_observed is only valid for kind curriculum_clock".into(),
+            ));
+        }
+
+        let previous = version_ref(ds.id, ds.state_version);
+        let observation = adapt_lapis_observe(&ds.spec, emit)?;
+        ds.status = observation.status;
+        ds.state_version += 1;
+        ds.last_reconciled = Some(now_ms());
+        ds.reconciled_by = Some(session.agent_id);
+        ds.content_hash = desired_state_hash(&ds.spec, &ds.status, ds.state_version)?;
+
+        let event = Event {
+            id: Uuid::new_v4(),
+            vault_id: ds.vault_id,
+            ts: now_ms(),
+            actor: session.agent_id,
+            event_type: "Reconciled".into(),
+            data: serde_yaml::to_value(&ds.status.observed)?,
+            caused_by: Vec::new(),
+            reconciles: Some(ds.id),
+            supersedes: Some(previous),
+        };
+
+        let sp = self.conn.savepoint()?;
+        persist_desired_state_update(&sp, &ds)?;
+        persist_event(&sp, &event)?;
+        project_causal_edges(&sp, &event)?;
+        sp.commit()?;
+        Ok((ds, event))
+    }
+
     /// Warm path: spec vs status now. Does not read the event log.
     pub fn current_state(&self, token: &str, desired_state_id: Uuid) -> Result<DesiredState> {
         let session = self.auth(token)?;
@@ -429,7 +481,9 @@ impl Store {
         Ok(self
             .conn
             .query_row(
-                &format!("SELECT {DS_COLUMNS} FROM desired_states WHERE vault_id = ?1 AND name = ?2"),
+                &format!(
+                    "SELECT {DS_COLUMNS} FROM desired_states WHERE vault_id = ?1 AND name = ?2"
+                ),
                 params![vault_id.to_string(), name],
                 desired_state_from_row,
             )

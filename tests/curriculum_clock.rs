@@ -131,6 +131,7 @@ fn curriculum_clock_put_gap_then_warm() {
         3,
         3,
         1,
+        0,
         PATHS,
         Some("2026-09-21T19:45:00-04:00"),
     )
@@ -226,4 +227,33 @@ fn curriculum_clock_put_gap_then_warm() {
     let current = store.current_state(&boot.token, ds.id).unwrap();
     assert!(strings(&current.status.observed["missing"]).is_empty());
     assert_eq!(current.spec["kind"].as_str(), Some("curriculum_clock"));
+}
+
+#[test]
+fn old_curriculum_clock_spec_without_lesson_md_still_parses() {
+    let mut tmp = TempStore::new();
+    let boot = tmp
+        .store
+        .bootstrap("curriculum", "scribe", "agents/scribe")
+        .unwrap();
+    let spec: serde_yaml::Value = serde_yaml::from_str(
+        r#"
+kind: curriculum_clock
+date: "2026-09-21"
+clock: maghrib
+expected:
+  quiz_html: 0
+  lab_refs: 0
+  ship_note: 1
+required_paths:
+  - path: agents/mail_room/Leo/2026-09-21-maghrib.md
+    role: ship_note
+"#,
+    )
+    .unwrap();
+    let ds = tmp
+        .store
+        .put_desired_state(&boot.token, "maghrib-2026-09-21", spec, 0.5)
+        .unwrap();
+    assert!(ds.spec["expected"].get("lesson_md").is_none());
 }

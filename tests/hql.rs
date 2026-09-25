@@ -165,7 +165,9 @@ fn build_session_db(path: &std::path::Path) -> SessionIds {
     store.put_node(&token, ops).unwrap();
 
     let spec = DesiredState::docs_eod_spec("2026-08-25", &["alpha"]).unwrap();
-    let ds = store.put_desired_state(&token, "deploy", spec, 0.8).unwrap();
+    let ds = store
+        .put_desired_state(&token, "deploy", spec, 0.8)
+        .unwrap();
     let (_, ev1) = store.reconcile(&token, ds.id).unwrap();
     let alpha = Node::brief_document(vault_id, "alpha", "2026-08-25").unwrap();
     store.put_node(&token, alpha).unwrap();
@@ -589,7 +591,11 @@ fn hql_opens_read_only() {
     let before = std::fs::read(&db.path).unwrap();
     run_pipeline(&db.path, PIPE_RESOLVED).unwrap();
     run_pipeline(&db.path, "vault demo-vault | state").unwrap();
-    assert_eq!(std::fs::read(&db.path).unwrap(), before, "HQL must not touch the file");
+    assert_eq!(
+        std::fs::read(&db.path).unwrap(),
+        before,
+        "HQL must not touch the file"
+    );
     let _store = RoStore::open(&db.path).unwrap();
     let write = Connection::open_with_flags(&db.path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY);
     let conn = write.unwrap();
@@ -606,13 +612,18 @@ fn vault_state_lists_all_named_desired_states() {
         .iter()
         .map(|row| s(row, "name").unwrap_or_default())
         .collect();
-    assert_eq!(names, vec!["deploy".to_string(), "eod-2026-08-25".to_string()]);
+    assert_eq!(
+        names,
+        vec!["deploy".to_string(), "eod-2026-08-25".to_string()]
+    );
     assert_eq!(s(&rows[0], "id"), Some(ids.ds.to_string()));
     assert_eq!(s(&rows[1], "id"), Some(ids.eod.to_string()));
     assert_eq!(rows[0].get("state_version"), Value::Int(3));
     assert_eq!(rows[1].get("state_version"), Value::Int(2));
     // Subject is the vault node.
-    assert!(rows.iter().all(|row| s(row, "path").as_deref() == Some("prod")));
+    assert!(rows
+        .iter()
+        .all(|row| s(row, "path").as_deref() == Some("prod")));
     let fields = hedron_core::hql::fields_of(&rows);
     assert!(fields.iter().any(|f| f == "name"));
     assert!(!fields.iter().any(|f| f == "spec" || f == "status"));
@@ -630,7 +641,11 @@ fn agent_state_selects_desired_state_named_after_agent() {
     let db = TempDb::new("session-agent-state");
     let ids = build_session_db(&db.path);
     let rows = run_pipeline(&db.path, "vault prod | agent deploy | state").unwrap();
-    assert_eq!(rows.len(), 1, "agent deploy selects only the DS named deploy");
+    assert_eq!(
+        rows.len(),
+        1,
+        "agent deploy selects only the DS named deploy"
+    );
     assert_eq!(s(&rows[0], "name").as_deref(), Some("deploy"));
     assert_eq!(s(&rows[0], "id"), Some(ids.ds.to_string()));
     assert_eq!(s(&rows[0], "path").as_deref(), Some("deploy"));
@@ -659,7 +674,10 @@ fn state_name_works_without_agent_or_vault_node() {
     assert_eq!(rows[0].get("path"), Value::Null, "no subject node");
     assert_eq!(s(&rows[0], "name").as_deref(), Some("deploy"));
     assert_eq!(s(&rows[0], "id"), Some(ids.ds.to_string()));
-    assert!(matches!(rows[0], hedron_core::hql::Row::State { subject: None, .. }));
+    assert!(matches!(
+        rows[0],
+        hedron_core::hql::Row::State { subject: None, .. }
+    ));
 
     let history = run_pipeline(
         &db.path,

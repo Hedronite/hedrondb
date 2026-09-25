@@ -25,7 +25,7 @@ pub const DOCS_EOD_KIND: &str = "docs_eod";
 /// `spec.kind` handled by [`CurriculumClock`].
 pub const CURRICULUM_CLOCK_KIND: &str = "curriculum_clock";
 
-const ROLES: [&str; 3] = ["quiz_html", "lab_refs", "ship_note"];
+const ROLES: [&str; 4] = ["quiz_html", "lab_refs", "ship_note", "lesson_md"];
 
 /// What a reconciler saw: the status to persist and the document ids that
 /// produced it. `Store::reconcile` projects `caused_by` onto the event row.
@@ -244,6 +244,7 @@ struct ObservedCounts {
     quiz_html: CountPair,
     lab_refs: CountPair,
     ship_note: CountPair,
+    lesson_md: CountPair,
 }
 
 #[derive(Serialize)]
@@ -268,18 +269,14 @@ fn observe_facts(spec: &CurriculumClockSpec, facts: &[Fact]) -> Result<Observati
             missing.push(req.path.clone());
         }
     }
-    let actuals = [
-        count_role(spec, &present, ROLES[0]),
-        count_role(spec, &present, ROLES[1]),
-        count_role(spec, &present, ROLES[2]),
-    ];
+    let actuals = role_actuals(spec, &present);
     finish(spec, present, missing, caused_by, actuals)
 }
 
 fn observe_globs(spec: &CurriculumClockSpec, facts: &[Fact]) -> Result<Observation> {
     let mut present = Vec::new();
     let mut caused_by = Vec::new();
-    let mut actuals = [0u64; 3];
+    let mut actuals = [0u64; ROLES.len()];
     for fact in facts {
         let role = fact
             .role
@@ -314,7 +311,7 @@ fn finish(
     present: Vec<String>,
     missing: Vec<String>,
     caused_by: Vec<Uuid>,
-    actuals: [u64; 3],
+    actuals: [u64; ROLES.len()],
 ) -> Result<Observation> {
     let (kind, message) = if missing.is_empty() {
         (
@@ -331,18 +328,10 @@ fn finish(
         present,
         missing,
         counts: ObservedCounts {
-            quiz_html: CountPair {
-                expected: spec.expected.quiz_html,
-                actual: actuals[0],
-            },
-            lab_refs: CountPair {
-                expected: spec.expected.lab_refs,
-                actual: actuals[1],
-            },
-            ship_note: CountPair {
-                expected: spec.expected.ship_note,
-                actual: actuals[2],
-            },
+            quiz_html: count_pair(spec, &actuals, ROLES[0]),
+            lab_refs: count_pair(spec, &actuals, ROLES[1]),
+            ship_note: count_pair(spec, &actuals, ROLES[2]),
+            lesson_md: count_pair(spec, &actuals, ROLES[3]),
         },
     })?;
     Ok(Observation {
@@ -417,6 +406,7 @@ fn validate_curriculum_clock_spec(spec: &CurriculumClockSpec) -> Result<()> {
         ("quiz_html", spec.globs.quiz_html.as_deref()),
         ("lab_refs", spec.globs.lab_refs.as_deref()),
         ("ship_note", spec.globs.ship_note.as_deref()),
+        ("lesson_md", spec.globs.lesson_md.as_deref()),
     ] {
         if let Some(pat) = pat {
             if pat.is_empty() {
@@ -562,7 +552,23 @@ fn expected_of(spec: &CurriculumClockSpec, role: &str) -> u64 {
         "quiz_html" => spec.expected.quiz_html,
         "lab_refs" => spec.expected.lab_refs,
         "ship_note" => spec.expected.ship_note,
+        "lesson_md" => spec.expected.lesson_md,
         _ => 0,
+    }
+}
+
+fn role_actuals(spec: &CurriculumClockSpec, present: &[String]) -> [u64; ROLES.len()] {
+    let mut actuals = [0u64; ROLES.len()];
+    for (idx, role) in ROLES.iter().enumerate() {
+        actuals[idx] = count_role(spec, present, role);
+    }
+    actuals
+}
+
+fn count_pair(spec: &CurriculumClockSpec, actuals: &[u64], role: &str) -> CountPair {
+    CountPair {
+        expected: expected_of(spec, role),
+        actual: actuals[role_index(role)],
     }
 }
 
@@ -579,6 +585,7 @@ fn glob_role<'a>(spec: &'a CurriculumClockSpec, path: &str) -> Option<&'a str> {
         (spec.globs.quiz_html.as_deref(), ROLES[0]),
         (spec.globs.lab_refs.as_deref(), ROLES[1]),
         (spec.globs.ship_note.as_deref(), ROLES[2]),
+        (spec.globs.lesson_md.as_deref(), ROLES[3]),
     ];
     pairs.into_iter().find_map(|(pat, role)| {
         pat.filter(|pattern| glob_match(pattern, path))
@@ -591,6 +598,7 @@ fn glob_label<'a>(spec: &'a CurriculumClockSpec, role: &str) -> Option<&'a str> 
         "quiz_html" => spec.globs.quiz_html.as_deref(),
         "lab_refs" => spec.globs.lab_refs.as_deref(),
         "ship_note" => spec.globs.ship_note.as_deref(),
+        "lesson_md" => spec.globs.lesson_md.as_deref(),
         _ => None,
     }
 }

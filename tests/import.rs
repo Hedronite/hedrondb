@@ -283,11 +283,7 @@ fn import_rolls_back_leaving_no_half_graph() {
         "---\nname: Alpha\n---\nSee [[beta]].\n",
     )
     .unwrap();
-    fs::write(
-        src.path.join("beta.md"),
-        "---\nname: Beta\n---\nBody.\n",
-    )
-    .unwrap();
+    fs::write(src.path.join("beta.md"), "---\nname: Beta\n---\nBody.\n").unwrap();
 
     let out = TempTree::new("out-rollback");
     let db = out.path.join("store.db");
@@ -355,11 +351,9 @@ fn import_briefs_date_writes_docs_eod_named_state() {
 
     let conn = Connection::open(&db).unwrap();
     let (name, spec): (String, String) = conn
-        .query_row(
-            "SELECT name, spec FROM desired_states LIMIT 1",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
+        .query_row("SELECT name, spec FROM desired_states LIMIT 1", [], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
         .unwrap();
     assert_eq!(name, "eod-2026-09-11");
     assert!(

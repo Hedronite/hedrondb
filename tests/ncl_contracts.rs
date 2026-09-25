@@ -34,10 +34,7 @@ fn bad_docs_eod_missing_date_is_invalid_at_put() {
         .store
         .bootstrap("prod", "deploy", "agents/deploy")
         .unwrap();
-    let bad: Value = serde_yaml::from_str(
-        "kind: docs_eod\nrequired_briefs:\n- alpha\n",
-    )
-    .unwrap();
+    let bad: Value = serde_yaml::from_str("kind: docs_eod\nrequired_briefs:\n- alpha\n").unwrap();
     let err = tmp
         .store
         .put_desired_state(&boot.token, "eod", bad, 0.5)

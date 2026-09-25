@@ -196,6 +196,9 @@ pub struct CurriculumExpected {
     pub quiz_html: u64,
     pub lab_refs: u64,
     pub ship_note: u64,
+    /// Lattice-visible lesson markdown. Absent on older specs, which means 0.
+    #[serde(default)]
+    pub lesson_md: u64,
 }
 
 /// One vault-relative path the clock requires, with its count role.
@@ -214,11 +217,16 @@ pub struct CurriculumGlobs {
     pub lab_refs: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ship_note: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lesson_md: Option<String>,
 }
 
 impl CurriculumGlobs {
     pub fn is_empty(&self) -> bool {
-        self.quiz_html.is_none() && self.lab_refs.is_none() && self.ship_note.is_none()
+        self.quiz_html.is_none()
+            && self.lab_refs.is_none()
+            && self.ship_note.is_none()
+            && self.lesson_md.is_none()
     }
 }
 
@@ -275,13 +283,16 @@ impl DesiredState {
 
     /// A `kind: curriculum_clock` spec. Path/count only — no secrets, no grades.
     /// `required_paths` entries are `(path, role)` with role
-    /// `quiz_html` | `lab_refs` | `ship_note`. Role counts must match `expected`.
+    /// `quiz_html` | `lab_refs` | `ship_note` | `lesson_md`.
+    /// Role counts must match `expected`.
+    #[allow(clippy::too_many_arguments)]
     pub fn curriculum_clock_spec(
         date: &str,
         clock: &str,
         quiz_html: u64,
         lab_refs: u64,
         ship_note: u64,
+        lesson_md: u64,
         required_paths: &[(&str, &str)],
         check_at: Option<&str>,
     ) -> Result<serde_yaml::Value> {
@@ -292,6 +303,7 @@ impl DesiredState {
                 quiz_html,
                 lab_refs,
                 ship_note,
+                lesson_md,
             },
             required_paths: required_paths
                 .iter()

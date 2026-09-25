@@ -11,6 +11,7 @@ pub mod import;
 pub mod jev;
 pub mod mcp;
 pub mod reconcile;
+pub mod source;
 mod store;
 mod types;
 
@@ -19,6 +20,13 @@ pub use jev::{ask, Choice, Decision, Transport};
 pub use reconcile::{
     adapt_lapis_observe, CurriculumClock, DocsEod, Observation, Reconciler, CURRICULUM_CLOCK_KIND,
     DOCS_EOD_KIND,
+};
+pub use source::{
+    cannot_tell_batch, close_note_path, evaluate_requirements, format_unix_utc, judge_freshness,
+    lesson_md_path, observe_lesson_ships, parse_manifest, parse_timestamp, reconcile_lesson_ships,
+    walk_watermark, AbsenceCheck, GuardVerdict, IndexFreshness, IntendedBundle, LaneDue,
+    LaneReport, LatticeSource, ObserveBatch, PathReason, RejectedWrite, ShipRequirement,
+    SourceConfig, SCOPE_START,
 };
 pub use store::{Store, SCHEMA_SQL};
 pub use types::{

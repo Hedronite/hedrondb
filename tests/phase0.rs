@@ -99,7 +99,10 @@ fn recon_loop_option_b_current_state_and_causal_chain() {
         current.spec["required_briefs"].as_sequence().unwrap().len(),
         3
     );
-    assert_eq!(current.status.observed["missing"][0].as_str(), Some("gamma"));
+    assert_eq!(
+        current.status.observed["missing"][0].as_str(),
+        Some("gamma")
+    );
     assert_eq!(current.state_version, 2);
 
     let chain = store.causal_chain(&token, ds.id).unwrap();
@@ -211,7 +214,10 @@ fn same_name_put_keeps_id_replaces_spec_and_appends_no_event() {
     let (third, event) = tmp.store.reconcile(&token, first.id).unwrap();
     assert_eq!(third.id, first.id);
     assert_eq!(third.state_version, 3);
-    assert_eq!(event.supersedes.as_deref(), Some(format!("{}@2", first.id).as_str()));
+    assert_eq!(
+        event.supersedes.as_deref(),
+        Some(format!("{}@2", first.id).as_str())
+    );
     assert_eq!(tmp.store.causal_chain(&token, first.id).unwrap().len(), 2);
 }
 
@@ -225,18 +231,20 @@ fn missing_or_unknown_kind_is_invalid() {
     let no_kind: Value =
         serde_yaml::from_str("date: 2026-08-25\nrequired_briefs:\n- alpha\n").unwrap();
     assert!(matches!(
-        tmp.store.put_desired_state(&boot.token, "eod", no_kind, 0.5),
+        tmp.store
+            .put_desired_state(&boot.token, "eod", no_kind, 0.5),
         Err(Error::Invalid(_))
     ));
-    let unknown: Value =
-        serde_yaml::from_str("kind: cluster_ready\nreplicas: 3\n").unwrap();
+    let unknown: Value = serde_yaml::from_str("kind: cluster_ready\nreplicas: 3\n").unwrap();
     assert!(matches!(
-        tmp.store.put_desired_state(&boot.token, "eod", unknown, 0.5),
+        tmp.store
+            .put_desired_state(&boot.token, "eod", unknown, 0.5),
         Err(Error::Invalid(_))
     ));
     let empty_name = DesiredState::docs_eod_spec("2026-08-25", &["alpha"]).unwrap();
     assert!(matches!(
-        tmp.store.put_desired_state(&boot.token, "", empty_name, 0.5),
+        tmp.store
+            .put_desired_state(&boot.token, "", empty_name, 0.5),
         Err(Error::Invalid(_))
     ));
     let ok = DesiredState::docs_eod_spec("2026-08-25", &["alpha"]).unwrap();
@@ -290,7 +298,13 @@ fn outer_transaction_rolls_back_nested_reconcile() {
         .unwrap();
     tmp.store.reconcile(&token, ds.id).unwrap();
     tmp.store.commit().unwrap();
-    assert_eq!(tmp.store.current_state(&token, ds.id).unwrap().state_version, 2);
+    assert_eq!(
+        tmp.store
+            .current_state(&token, ds.id)
+            .unwrap()
+            .state_version,
+        2
+    );
     assert_eq!(tmp.store.causal_chain(&token, ds.id).unwrap().len(), 1);
 }
 
@@ -483,7 +497,10 @@ fn legacy_extra_parser_is_gone() {
             files.push(path);
         }
     }
-    assert!(files.iter().any(|p| p.ends_with("row.py")), "python engine not scanned");
+    assert!(
+        files.iter().any(|p| p.ends_with("row.py")),
+        "python engine not scanned"
+    );
     for path in files {
         let src = fs::read_to_string(&path).unwrap();
         assert!(

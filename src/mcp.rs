@@ -70,9 +70,7 @@ pub fn handle(message: &Value) -> Option<Value> {
     if method.starts_with("notifications/") {
         return None;
     }
-    let Some(id) = id else {
-        return None;
-    };
+    let id = id?;
     Some(match method {
         "initialize" => rpc_result(id, initialize_result(&params)),
         "ping" => rpc_result(id, json!({})),
