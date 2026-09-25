@@ -29,20 +29,15 @@ const PIPE_HISTORY: &str = "vault prod | agent deploy | history";
 const PIPE_HISTORY_SELECT: &str =
     "vault prod | agent deploy | history | select id, ts, actor, type, caused_by, reconciles, supersedes, spec, status";
 const PIPE_ALL_STATES: &str = "vault prod | state";
-const PIPE_ALL_STATES_SELECT: &str =
-    "vault prod | state | select name, state_version, path, id, spec, status, importance";
+const PIPE_ALL_STATES_SELECT: &str = "vault prod | state | select name, state_version, path, id, spec, status, importance";
 const PIPE_ONE_STATE: &str = "vault prod | state eod-2026-08-25";
-const PIPE_OPS_EXPLICIT: &str =
-    "vault prod | agent ops | state deploy | select path, extra.title, name, id";
+const PIPE_OPS_EXPLICIT: &str = "vault prod | agent ops | state deploy | select path, extra.title, name, id";
 const PIPE_OPS_NONE: &str = "vault prod | agent ops | state";
 const PIPE_NO_SUBJECT: &str = r#"vault prod | filter path ^= "notes/" | state deploy"#;
-const PIPE_NO_SUBJECT_HISTORY: &str =
-    r#"vault prod | filter path ^= "notes/" | history deploy | select id, supersedes, name"#;
-const PIPE_STATE_NO_EVENTS: &str =
-    "vault prod | agent deploy | state | select ts, actor, supersedes, name";
+const PIPE_NO_SUBJECT_HISTORY: &str = r#"vault prod | filter path ^= "notes/" | history deploy | select id, supersedes, name"#;
+const PIPE_STATE_NO_EVENTS: &str = "vault prod | agent deploy | state | select ts, actor, supersedes, name";
 const PIPE_YAML_EXTRA: &str = r#"vault demo-vault | filter path == "notes/nested.md" | select path, extra.tags, extra.version, extra.meta, extra.flag, extra.empty, extra.when, extra.ratio, extra.missing"#;
-const PIPE_YAML_FILTER: &str =
-    r#"vault demo-vault | filter extra.version == "2" && extra.flag == "true" | select path"#;
+const PIPE_YAML_FILTER: &str = r#"vault demo-vault | filter extra.version == "2" && extra.flag == "true" | select path"#;
 
 struct TempDb {
     path: PathBuf,
@@ -161,9 +156,7 @@ fn build_session_db(path: &Path) {
     };
     store.put_node(&token, ops).unwrap();
     let spec = DesiredState::docs_eod_spec("2026-08-25", &["alpha"]).unwrap();
-    let ds = store
-        .put_desired_state(&token, "deploy", spec, 0.8)
-        .unwrap();
+    let ds = store.put_desired_state(&token, "deploy", spec, 0.8).unwrap();
     store.reconcile(&token, ds.id).unwrap();
     let alpha = Node::brief_document(vault_id, "alpha", "2026-08-25").unwrap();
     store.put_node(&token, alpha).unwrap();

@@ -379,7 +379,7 @@ fn validate_curriculum_clock_spec(spec: &CurriculumClockSpec) -> Result<()> {
                 req.role
             )));
         }
-        if seen.iter().any(|path| *path == &req.path) {
+        if seen.contains(&&req.path) {
             return Err(Error::Invalid(format!(
                 "{CURRICULUM_CLOCK_KIND} spec: duplicate path {}",
                 req.path

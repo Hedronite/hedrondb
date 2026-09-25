@@ -164,10 +164,7 @@ fn select_states(
         .collect();
     if !vaults.is_empty() {
         for vault in vaults {
-            for ds in in_vault(&vault.vault_id)
-                .into_iter()
-                .filter(|ds| wanted(ds))
-            {
+            for ds in in_vault(&vault.vault_id).into_iter().filter(|ds| wanted(ds)) {
                 selected.push((Some(vault.clone()), ds.clone()));
             }
         }
@@ -250,7 +247,11 @@ pub(crate) fn apply_state(rows: &[Row], name: Option<&str>, store: &RoStore) -> 
 
 /// Cool: the causal events of each selected desired state
 /// (`events.reconciles = ds.id`, `ts ASC, id ASC`). Never reads spec / status.
-pub(crate) fn apply_history(rows: &[Row], name: Option<&str>, store: &RoStore) -> Result<Vec<Row>> {
+pub(crate) fn apply_history(
+    rows: &[Row],
+    name: Option<&str>,
+    store: &RoStore,
+) -> Result<Vec<Row>> {
     let mut emitted = Vec::new();
     for (_, ds) in select_states(rows, name, store)? {
         for event in store.causal_chain(&ds.id)? {

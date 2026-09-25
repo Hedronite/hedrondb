@@ -12,13 +12,10 @@ use crate::store::{Store, SCHEMA_SQL};
 use crate::types::Event;
 use uuid::Uuid;
 
-type ColumnDecl = (String, String);
-type TableSchema = (String, Vec<ColumnDecl>);
-
 /// Expected tables and `(column, declared type)` pairs, derived from the
 /// crate `schema.sql` embedded at compile time. Not a second handwritten list.
-fn expected_schema() -> &'static [TableSchema] {
-    static PARSED: OnceLock<Vec<TableSchema>> = OnceLock::new();
+fn expected_schema() -> &'static [(String, Vec<(String, String)>)] {
+    static PARSED: OnceLock<Vec<(String, Vec<(String, String)>)>> = OnceLock::new();
     PARSED.get_or_init(|| parse_schema_sql(SCHEMA_SQL))
 }
 
@@ -39,11 +36,7 @@ pub(crate) fn parse_schema_sql(sql: &str) -> Vec<(String, Vec<(String, String)>)
         let (Some(open), Some(close)) = (after.find('('), after.find(");")) else {
             break;
         };
-        let name = after[..open]
-            .split_whitespace()
-            .last()
-            .unwrap_or("")
-            .to_string();
+        let name = after[..open].split_whitespace().last().unwrap_or("").to_string();
         let mut cols = Vec::new();
         for piece in split_top_level(&after[open + 1..close]) {
             let mut words = piece.split_whitespace();
@@ -308,9 +301,7 @@ mod tests {
         let parsed = parse_schema_sql(SCHEMA_SQL);
         assert!(!parsed.is_empty(), "schema.sql parsed to zero tables");
         for (table, cols) in &parsed {
-            let mut stmt = conn
-                .prepare(&format!("PRAGMA table_info({table})"))
-                .unwrap();
+            let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})")).unwrap();
             let live: Vec<(String, String)> = stmt
                 .query_map([], |row| Ok((row.get(1)?, row.get(2)?)))
                 .unwrap()

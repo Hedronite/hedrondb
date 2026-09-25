@@ -10,21 +10,30 @@
 //!   [--lane NAME]... \
 //!   [--check-at LANE=YYYY-MM-DDTHH:MM:SSZ]... \
 //!   [--glob LANE=SQLITE_GLOB]... \
+//!   [--register-log PATH] \
 //!   [--busy-timeout-ms N]
 //! ```
 //!
 //! Lanes default to `duha`, `asr`, and `maghrib` when `--lane` is omitted.
 //! That list is a slice-1 stand-in. Fire Watch YAML is slice 2. A lane with
 //! no manifest row and no `--glob` uses the label
-//! `Archmagus-Stack/{lane}/{date}-*/lesson.md` and does not treat a glob hit
-//! from another lane as this lane's lesson. Pass `--check-at` when an absent
-//! row should be a trusted miss; without a ship hint or `--check-at`, an
-//! absence stays `stale`.
+//! `manifest-row-missing:{lane}:{date}` and does not treat a glob hit from
+//! another lane as this lane's lesson.
+//!
+//! Each lane gets a default `check_at` unless `--check-at` sets that lane.
+//! The stand-in is September EDT (UTC-4): duha 11:00, dhuhr 13:45, asr
+//! 17:45 (fire plus grace), maghrib 20:35. DST ends 2026-11-01; this offset
+//! is not a zone database. A lane before that time reports `pending`.
+//!
+//! `register.log` is read from `{manifest_dir}/_tools/register.log` when that
+//! file exists. `--register-log` overrides the path. A missing default log is
+//! ignored. An unreadable log fails closed to `cannot_tell`.
 
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -54,6 +63,13 @@ fn run() -> Result<(), String> {
             return Ok(());
         }
     };
+    let register_log = match load_register_log(&args.manifest, args.register_log.as_deref()) {
+        Ok(text) => text,
+        Err(err) => {
+            print_batch(&args, &cannot_tell_batch(&args.lanes, &err));
+            return Ok(());
+        }
+    };
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|dur| dur.as_secs() as i64)
@@ -62,7 +78,13 @@ fn run() -> Result<(), String> {
         lattice_path: args.lattice.clone(),
         busy_timeout_ms: args.busy_timeout_ms,
     }) {
-        Ok(source) => match observe_lesson_ships(&source, &yaml, &args.lanes, Some(now)) {
+        Ok(source) => match observe_lesson_ships(
+            &source,
+            &yaml,
+            &args.lanes,
+            Some(now),
+            register_log.as_deref(),
+        ) {
             Ok(batch) => batch,
             Err(err) => cannot_tell_batch(&args.lanes, &err),
         },
@@ -93,6 +115,7 @@ fn print_batch(args: &Args, batch: &ObserveBatch) {
 struct Args {
     lattice: PathBuf,
     manifest: PathBuf,
+    register_log: Option<PathBuf>,
     date: String,
     lanes: Vec<LaneDue>,
     busy_timeout_ms: u64,
@@ -106,6 +129,7 @@ impl Args {
         let mut lane_names = Vec::new();
         let mut check_at: BTreeMap<String, String> = BTreeMap::new();
         let mut globs: BTreeMap<String, String> = BTreeMap::new();
+        let mut register_log = None;
         let mut busy_timeout_ms = 2_000u64;
         let mut argv = argv.peekable();
         while let Some(arg) = argv.next() {
@@ -122,6 +146,9 @@ impl Args {
                 "--glob" => {
                     let (lane, value) = split_pair(&need(&mut argv, "--glob")?, "--glob")?;
                     globs.insert(lane, value);
+                }
+                "--register-log" => {
+                    register_log = Some(PathBuf::from(need(&mut argv, "--register-log")?));
                 }
                 "--busy-timeout-ms" => {
                     let raw = need(&mut argv, "--busy-timeout-ms")?;
@@ -147,7 +174,10 @@ impl Args {
         let lanes = lane_names
             .into_iter()
             .map(|lane| LaneDue {
-                check_at: check_at.get(&lane).cloned(),
+                check_at: check_at
+                    .get(&lane)
+                    .cloned()
+                    .or_else(|| default_check_at(&date, &lane)),
                 lesson_glob: globs.get(&lane).cloned(),
                 date: date.clone(),
                 lane,
@@ -156,10 +186,46 @@ impl Args {
         Ok(Self {
             lattice: PathBuf::from(lattice),
             manifest: PathBuf::from(manifest),
+            register_log,
             date,
             lanes,
             busy_timeout_ms,
         })
+    }
+}
+
+/// EDT stand-in. Asr and maghrib match the design card; duha and dhuhr are
+/// morning and midday placeholders until Fire Watch is parsed.
+fn default_check_at(date: &str, lane: &str) -> Option<String> {
+    let clock = match lane {
+        "duha" => "11:00:00",
+        "dhuhr" => "13:45:00",
+        "asr" => "17:45:00",
+        "maghrib" => "20:35:00",
+        _ => return None,
+    };
+    Some(format!("{date}T{clock}-04:00"))
+}
+
+fn load_register_log(
+    manifest: &Path,
+    override_path: Option<&Path>,
+) -> Result<Option<String>, Error> {
+    let path = if let Some(path) = override_path {
+        path.to_path_buf()
+    } else {
+        let Some(dir) = manifest.parent() else {
+            return Ok(None);
+        };
+        dir.join("_tools").join("register.log")
+    };
+    match fs::read_to_string(&path) {
+        Ok(text) => Ok(Some(text)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound && override_path.is_none() => Ok(None),
+        Err(err) => Err(Error::SourceUnreadable(format!(
+            "register log {}: {err}",
+            path.display()
+        ))),
     }
 }
 
@@ -181,6 +247,7 @@ fn split_pair(raw: &str, flag: &str) -> Result<(String, String), String> {
 
 fn help() -> String {
     "usage: lesson_ship_observe --lattice PATH --manifest PATH --date YYYY-MM-DD \
-[--lane NAME]... [--check-at LANE=ISO]... [--glob LANE=GLOB]... [--busy-timeout-ms N]"
+[--lane NAME]... [--check-at LANE=ISO]... [--glob LANE=GLOB]... \
+[--register-log PATH] [--busy-timeout-ms N]"
         .into()
 }

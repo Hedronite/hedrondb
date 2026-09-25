@@ -131,7 +131,6 @@ fn curriculum_clock_put_gap_then_warm() {
         3,
         3,
         1,
-        0,
         PATHS,
         Some("2026-09-21T19:45:00-04:00"),
     )
@@ -157,9 +156,7 @@ fn curriculum_clock_put_gap_then_warm() {
     assert_eq!(count(&gap.status.observed, "quiz_html", "actual"), 0);
     assert_eq!(count(&gap.status.observed, "lab_refs", "actual"), 0);
     assert_eq!(count(&gap.status.observed, "ship_note", "actual"), 0);
-    assert!(!strings(&gap.status.observed["missing"])
-        .iter()
-        .any(|path| *path == "decoy-not-a-path"));
+    assert!(!strings(&gap.status.observed["missing"]).contains(&"decoy-not-a-path"));
 
     let gap_emit = yaml_from_json(emit("warm", &[], false));
     let adapted_gap = adapt_lapis_observe(&spec, &gap_emit).unwrap();

@@ -13,13 +13,15 @@ use crate::source::lattice::{IndexFreshness, LatticeSource};
 use crate::source::manifest::{
     close_note_path, is_superseded_path, lab_ref_path, parse_manifest, IntendedBundle,
 };
+use crate::source::register_log::RegisterLog;
 use crate::source::time::{format_unix_utc, parse_timestamp, SCOPE_START};
 use crate::store::Store;
-use crate::types::DesiredState;
+use crate::types::{DesiredState, LessonClockSpec};
 
 const REASON_MISSING_PATH: &str = "missing_path";
 const REASON_CLOSE_NOTE: &str = "close_note_missing";
 const REASON_MANIFEST_ROW: &str = "manifest_row_missing";
+const LESSON_SHIP_IMPORTANCE: f64 = 0.5;
 
 /// One due lane. Slice 2 will fill this from Fire Watch; slice 1 takes it as data.
 #[derive(Debug, Clone)]
@@ -36,6 +38,8 @@ pub struct ShipRequirement {
     pub path: String,
     pub role: String,
     pub reason: String,
+    /// Lesson and lab paths only. A close note ignores this and uses `check_at`.
+    pub landed_hint: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -88,7 +92,12 @@ impl ObserveBatch {
             if report.status != "warm" && report.status != "gap" {
                 continue;
             }
-            let ds = store.put_desired_state(token, &report.subject, plan.spec.clone(), 0.5)?;
+            let ds = store.put_desired_state(
+                token,
+                &report.subject,
+                plan.spec.clone(),
+                LESSON_SHIP_IMPORTANCE,
+            )?;
             store.reconcile_observed(token, ds.id, &plan.emit)?;
         }
         Ok(())
@@ -122,9 +131,11 @@ pub fn observe_lesson_ships(
     manifest_yaml: &str,
     lanes: &[LaneDue],
     as_of_unix: Option<i64>,
+    register_log: Option<&str>,
 ) -> Result<ObserveBatch> {
     let freshness = source.freshness()?;
     let bundles = parse_manifest(manifest_yaml)?;
+    let register_log = RegisterLog::parse(register_log.unwrap_or(""));
     let watermark_utc = freshness.watermark_unix.map(format_unix_utc);
     let mut prepared = Vec::with_capacity(lanes.len());
     let mut exact_paths = Vec::new();
@@ -134,7 +145,7 @@ pub fn observe_lesson_ships(
             prepared.push(None);
             continue;
         }
-        let (reqs, extra) = requirements_for(source, lane, &bundles)?;
+        let (reqs, extra) = requirements_for(source, lane, &bundles, &register_log)?;
         for req in &reqs {
             if is_exact_path(&req.path) {
                 exact_paths.push(req.path.clone());
@@ -148,14 +159,13 @@ pub fn observe_lesson_ships(
     let present = hits.iter().map(|hit| hit.path.clone()).collect::<Vec<_>>();
     let mut reports = Vec::with_capacity(lanes.len());
     let mut plans = Vec::with_capacity(lanes.len());
-    for (lane, reqs) in lanes.iter().zip(prepared.into_iter()) {
+    for (lane, reqs) in lanes.iter().zip(prepared) {
         let Some(reqs) = reqs else {
             reports.push(not_evaluated(lane));
             plans.push(None);
             continue;
         };
-        let hint = landed_hint(lane, &bundles, &hits);
-        match decide(lane, &reqs, &present, hint, &freshness, as_of_unix) {
+        match decide(lane, &reqs, &present, None, &freshness, as_of_unix) {
             Ok(decided) => {
                 let mut report = decided.report;
                 report.watermark_utc.clone_from(&watermark_utc);
@@ -191,12 +201,15 @@ pub fn reconcile_lesson_ships(
     manifest_yaml: &str,
     lanes: &[LaneDue],
     as_of_unix: Option<i64>,
+    register_log: Option<&str>,
 ) -> Result<Vec<LaneReport>> {
     let batch = match opened {
-        Ok(source) => match observe_lesson_ships(source, manifest_yaml, lanes, as_of_unix) {
-            Ok(batch) => batch,
-            Err(err) => return Ok(cannot_tell_batch(lanes, &err).lanes),
-        },
+        Ok(source) => {
+            match observe_lesson_ships(source, manifest_yaml, lanes, as_of_unix, register_log) {
+                Ok(batch) => batch,
+                Err(err) => return Ok(cannot_tell_batch(lanes, &err).lanes),
+            }
+        }
         Err(err) => return Ok(cannot_tell_batch(lanes, err).lanes),
     };
     batch.persist(store, token)?;
@@ -209,7 +222,7 @@ pub fn evaluate_requirements(
     lane: &LaneDue,
     requirements: &[ShipRequirement],
     present_paths: &[String],
-    landed_hint: Option<i64>,
+    fill_hint: Option<i64>,
     watermark_unix: Option<i64>,
     as_of_unix: Option<i64>,
 ) -> Result<LaneReport> {
@@ -225,7 +238,7 @@ pub fn evaluate_requirements(
         lane,
         requirements,
         present_paths,
-        landed_hint,
+        fill_hint,
         &freshness,
         as_of_unix,
     )?
@@ -241,7 +254,7 @@ fn decide(
     lane: &LaneDue,
     requirements: &[ShipRequirement],
     present_paths: &[String],
-    landed_hint: Option<i64>,
+    fill_hint: Option<i64>,
     freshness: &IndexFreshness,
     as_of_unix: Option<i64>,
 ) -> Result<Decided> {
@@ -278,7 +291,7 @@ fn decide(
         .map(|req| AbsenceCheck {
             path: req.path.clone(),
             present: path_present(&req.path, present_paths),
-            landed_hint,
+            landed_hint: path_hint(req, fill_hint),
             check_at,
         })
         .collect();
@@ -335,6 +348,7 @@ fn requirements_for(
     source: &LatticeSource,
     lane: &LaneDue,
     bundles: &[IntendedBundle],
+    register_log: &RegisterLog,
 ) -> Result<(Vec<ShipRequirement>, Vec<crate::source::LatticeRow>)> {
     let matched: Vec<&IntendedBundle> = bundles
         .iter()
@@ -346,32 +360,40 @@ fn requirements_for(
         if let Some(glob) = &lane.lesson_glob {
             let found = source.glob_rows(glob)?;
             if found.is_empty() {
-                reqs.push(requirement(glob, "lesson_md", REASON_MANIFEST_ROW));
+                reqs.push(requirement(glob, "lesson_md", REASON_MANIFEST_ROW, None));
             } else {
                 for row in &found {
-                    reqs.push(requirement(&row.path, "lesson_md", REASON_MISSING_PATH));
+                    reqs.push(requirement(
+                        &row.path,
+                        "lesson_md",
+                        REASON_MISSING_PATH,
+                        None,
+                    ));
                 }
                 extra = found;
             }
         } else {
-            let label = format!("Archmagus-Stack/{}/{}-*/lesson.md", lane.lane, lane.date);
-            reqs.push(requirement(label, "lesson_md", REASON_MANIFEST_ROW));
+            let label = format!("manifest-row-missing:{}:{}", lane.lane, lane.date);
+            reqs.push(requirement(label, "lesson_md", REASON_MANIFEST_ROW, None));
         }
     } else {
         for bundle in &matched {
             if is_superseded_path(&bundle.lesson_md_path) {
                 continue;
             }
+            let hint = bundle_landed_hint(bundle, register_log);
             reqs.push(requirement(
                 bundle.lesson_md_path.clone(),
                 "lesson_md",
                 REASON_MISSING_PATH,
+                hint,
             ));
             if lane.lane == "maghrib" {
                 reqs.push(requirement(
                     lab_ref_path(&bundle.lesson_md_path),
                     "lab_refs",
                     REASON_MISSING_PATH,
+                    hint,
                 ));
             }
         }
@@ -380,57 +402,53 @@ fn requirements_for(
         close_note_path(&lane.date, &lane.lane),
         "ship_note",
         REASON_CLOSE_NOTE,
+        None,
     ));
     dedupe_reqs(&mut reqs);
     Ok((reqs, extra))
 }
 
-fn requirement(path: impl AsRef<str>, role: &str, reason: &str) -> ShipRequirement {
+fn requirement(
+    path: impl AsRef<str>,
+    role: &str,
+    reason: &str,
+    landed_hint: Option<i64>,
+) -> ShipRequirement {
     ShipRequirement {
         path: path.as_ref().to_string(),
         role: role.to_string(),
         reason: reason.to_string(),
+        landed_hint,
+    }
+}
+
+/// Close notes use the lane `check_at`, never a lesson registration stamp.
+fn path_hint(req: &ShipRequirement, fill_hint: Option<i64>) -> Option<i64> {
+    if req.role == "ship_note" {
+        None
+    } else {
+        req.landed_hint.or(fill_hint)
+    }
+}
+
+fn bundle_landed_hint(bundle: &IntendedBundle, register_log: &RegisterLog) -> Option<i64> {
+    if bundle.revised {
+        register_log.latest_for(&bundle.date, &bundle.lane)
+    } else {
+        bundle.registered_by.as_deref().and_then(parse_timestamp)
     }
 }
 
 fn dedupe_reqs(reqs: &mut Vec<ShipRequirement>) {
     let mut seen = Vec::new();
     reqs.retain(|req| {
-        if seen.iter().any(|path| path == &req.path) {
+        if seen.contains(&req.path) {
             false
         } else {
             seen.push(req.path.clone());
             true
         }
     });
-}
-
-fn landed_hint(
-    lane: &LaneDue,
-    bundles: &[IntendedBundle],
-    hits: &[crate::source::LatticeRow],
-) -> Option<i64> {
-    let mut hints = Vec::new();
-    for bundle in bundles {
-        if bundle.date != lane.date || bundle.lane != lane.lane {
-            continue;
-        }
-        if let Some(ts) = bundle.registered_by.as_deref().and_then(parse_timestamp) {
-            hints.push(ts);
-        }
-    }
-    let note = close_note_path(&lane.date, &lane.lane);
-    if let Some(row) = hits.iter().find(|hit| hit.path == note) {
-        for raw in [row.redo_landed_at.as_deref(), row.landed_at.as_deref()]
-            .into_iter()
-            .flatten()
-        {
-            if let Some(ts) = parse_timestamp(raw) {
-                hints.push(ts);
-            }
-        }
-    }
-    hints.into_iter().min()
 }
 
 fn spec_and_emit(
@@ -450,16 +468,16 @@ fn spec_and_emit(
         .check_at
         .as_deref()
         .filter(|value| value.contains('T') && value.len() >= 16);
-    let spec = DesiredState::curriculum_clock_spec(
-        &lane.date,
-        &lane.lane,
-        count_role(requirements, "quiz_html"),
-        count_role(requirements, "lab_refs"),
-        count_role(requirements, "ship_note"),
-        count_role(requirements, "lesson_md"),
-        &refs,
+    let spec = DesiredState::lesson_clock(LessonClockSpec {
+        date: &lane.date,
+        clock: &lane.lane,
+        quiz_html: count_role(requirements, "quiz_html"),
+        lab_refs: count_role(requirements, "lab_refs"),
+        ship_note: count_role(requirements, "ship_note"),
+        lesson_md: count_role(requirements, "lesson_md"),
+        required_paths: &refs,
         check_at,
-    )?;
+    })?;
     let mut evidence = Vec::new();
     let mut present = Vec::new();
     for req in requirements {

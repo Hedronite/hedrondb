@@ -233,6 +233,7 @@ fn g1_warm_two_lessons_and_close_note() {
             lane("2026-09-24", "duha", None, None),
         ],
         None,
+        None,
     )
     .unwrap();
     let warm = report(&reports, "duha");
@@ -305,6 +306,7 @@ fn g2_trusted_miss_is_gap() {
         manifest,
         &[lane("2026-09-25", "asr", None, None)],
         None,
+        None,
     )
     .unwrap();
     let gap = report(&reports, "asr");
@@ -357,6 +359,7 @@ fn g3_indexer_kick_is_stale_not_missing() {
         Ok(&source),
         manifest,
         &[lane("2026-09-25", "asr", None, None)],
+        None,
         None,
     )
     .unwrap();
@@ -418,6 +421,7 @@ fn g4_superseded_ghost_is_not_counted() {
         manifest,
         &[lane("2026-09-25", "asr", None, None)],
         None,
+        None,
     )
     .unwrap();
     let gap = report(&reports, "asr");
@@ -455,6 +459,7 @@ fn g5_missing_manifest_row_uses_glob_label() {
             Some(glob),
         )],
         None,
+        None,
     )
     .unwrap();
     let gap = report(&reports, "asr");
@@ -486,6 +491,7 @@ fn g6_fail_closed_cannot_tell_leaves_desired_state() {
         opened.as_ref(),
         manifest,
         &lanes,
+        None,
         None,
     )
     .unwrap();
@@ -519,6 +525,7 @@ fn g6_fail_closed_cannot_tell_leaves_desired_state() {
         opened.as_ref(),
         manifest,
         &lanes,
+        None,
         None,
     )
     .unwrap();
@@ -564,6 +571,7 @@ fn g6_fail_closed_cannot_tell_leaves_desired_state() {
         manifest,
         &lanes,
         None,
+        None,
     )
     .unwrap();
     assert_eq!(report(&reports, "asr").status, "cannot_tell");
@@ -589,13 +597,7 @@ fn g7_write_is_rejected_and_bytes_stay_put() {
     let source = lattice.open();
     let _ = source.rows_for(&[lesson.to_string()]).unwrap();
     let _ = source.freshness().unwrap();
-    let rejected = source.rejected_write().unwrap();
-    assert_eq!(
-        rejected.sqlite_code & 0xFF,
-        rusqlite::ffi::SQLITE_READONLY,
-        "{}",
-        rejected.message
-    );
+    // The INSERT rejection lives in `g7_insert_is_sqlite_readonly` (crate unit test).
     assert_eq!(fingerprint(&lattice.path), before);
     let conn =
         Connection::open_with_flags(&lattice.path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
@@ -613,19 +615,19 @@ fn g7_write_is_rejected_and_bytes_stay_put() {
 fn g8_reconcile_observed_ignores_decoy_missing_and_vault_docs() {
     let lesson = "Archmagus-Stack/Polyglot-Dev/Rust/2026-09-25-alpha/lesson.md";
     let mut hedron = StoreFixture::new();
-    let spec = DesiredState::curriculum_clock_spec(
-        "2026-09-25",
-        "asr",
-        0,
-        0,
-        1,
-        1,
-        &[
+    let spec = DesiredState::lesson_clock(hedron_core::LessonClockSpec {
+        date: "2026-09-25",
+        clock: "asr",
+        quiz_html: 0,
+        lab_refs: 0,
+        ship_note: 1,
+        lesson_md: 1,
+        required_paths: &[
             (lesson, "lesson_md"),
             ("agents/mail_room/Leo/2026-09-25-asr.md", "ship_note"),
         ],
-        None,
-    )
+        check_at: None,
+    })
     .unwrap();
     let ds = hedron
         .store
@@ -801,6 +803,8 @@ fn manifest_maps_html_source_to_sibling_lesson_md() {
     let bundles = parse_manifest(yaml).unwrap();
     let lanes: Vec<&str> = bundles.iter().map(|bundle| bundle.lane.as_str()).collect();
     assert_eq!(lanes, ["maghrib", "maghrib", "maghrib", "duha"]);
+    assert!(bundles[0].revised);
+    assert!(!bundles[3].revised);
     assert_eq!(
         bundles[0].lesson_md_path,
         "Archmagus-Stack/01-Earth-DevOps/Synthesis-Lessons/2026-09-25-rust-ops/lesson.md"
@@ -855,6 +859,7 @@ fn maghrib_bundle_requires_sibling_lab_ref() {
         manifest,
         &[lane("2026-09-25", "maghrib", None, None)],
         None,
+        None,
     )
     .unwrap();
     let gap = report(&reports, "maghrib");
@@ -885,6 +890,7 @@ fn pending_before_check_at_does_not_write() {
             Some("Archmagus-Stack/Polyglot-Dev/Nix/2026-09-25-*/lesson.md"),
         )],
         parse_timestamp("2026-09-25T12:00:00Z"),
+        None,
     )
     .unwrap();
     let pending = report(&reports, "asr");
@@ -895,4 +901,277 @@ fn pending_before_check_at_does_not_write() {
         scalar_count(&hedron.path, "SELECT count(*) FROM desired_states"),
         0
     );
+}
+
+#[test]
+fn legacy_duplicate_key_still_evaluates_scope_row() {
+    let legacy = r#"
+- date: 2026-06-23
+  lane: duha
+  cert:
+    source: Polyglot-Dev/Old/2026-06-23-a/lesson.html
+  cert:
+    source: Polyglot-Dev/Old/2026-06-23-b/lesson.html
+"#;
+    assert!(
+        serde_yaml::from_str::<Value>(legacy).is_err(),
+        "the legacy row alone is not valid YAML"
+    );
+    let lesson = "Archmagus-Stack/Polyglot-Dev/Rust/2026-09-25-alpha/lesson.md";
+    let note = "agents/mail_room/Leo/2026-09-25-duha.md";
+    let manifest = format!(
+        "{legacy}\
+- date: 2026-09-25
+  lane: duha
+  registered_by: \"2026-09-25T14:00:00Z\"
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-25-alpha/lesson.html
+"
+    );
+    assert!(serde_yaml::from_str::<Value>(&manifest).is_err());
+    let bundles = parse_manifest(&manifest).unwrap();
+    assert_eq!(bundles.len(), 1);
+    assert_eq!(bundles[0].date, "2026-09-25");
+    assert_eq!(bundles[0].lesson_md_path, lesson);
+    let lattice = LatticeFixture::build(
+        &[
+            Doc {
+                path: lesson,
+                frontmatter: None,
+                indexed_at: "2026-09-25T14:10:00Z",
+            },
+            Doc {
+                path: note,
+                frontmatter: None,
+                indexed_at: "2026-09-25T14:12:00Z",
+            },
+        ],
+        "2026-09-25T15:00:00Z",
+        "2026-09-25T12:00:00Z",
+        "2026-06-07T13:55:36Z",
+    );
+    let mut hedron = StoreFixture::new();
+    let source = lattice.open();
+    let reports = reconcile_lesson_ships(
+        &mut hedron.store,
+        &hedron.token,
+        Ok(&source),
+        &manifest,
+        &[lane("2026-09-25", "duha", None, None)],
+        None,
+        None,
+    )
+    .unwrap();
+    let warm = report(&reports, "duha");
+    assert_eq!(warm.status, "warm");
+    assert!(warm.cannot_tell.is_none());
+    assert!(warm.missing.is_empty());
+}
+
+#[test]
+fn in_scope_duplicate_key_fails_closed() {
+    let manifest = r#"
+- date: 2026-09-25
+  lane: duha
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-25-a/lesson.html
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-25-b/lesson.html
+"#;
+    let err = parse_manifest(manifest).unwrap_err();
+    assert!(err.to_string().contains("2026-09-25"), "{err}");
+    let lattice = LatticeFixture::build(
+        &[],
+        "2026-09-25T15:00:00Z",
+        "2026-09-25T12:00:00Z",
+        "2026-06-07T13:55:36Z",
+    );
+    let mut hedron = StoreFixture::new();
+    let source = lattice.open();
+    let reports = reconcile_lesson_ships(
+        &mut hedron.store,
+        &hedron.token,
+        Ok(&source),
+        manifest,
+        &[lane("2026-09-25", "duha", None, None)],
+        None,
+        None,
+    )
+    .unwrap();
+    let blocked = report(&reports, "duha");
+    assert_eq!(blocked.status, "cannot_tell");
+    assert!(blocked.missing.is_empty());
+    assert_eq!(scalar_count(&hedron.path, "SELECT count(*) FROM events"), 0);
+}
+
+#[test]
+fn manifest_rejects_top_level_mapping() {
+    let err = parse_manifest("rows:\n  - date: 2026-09-25\n    lane: duha\n").unwrap_err();
+    assert!(err.to_string().contains("YAML list"), "{err}");
+}
+
+#[test]
+fn prefixed_registered_by_without_seconds() {
+    let stamped = parse_timestamp("_tools/register.py 2026-09-25T14:40Z").unwrap();
+    assert_eq!(stamped, parse_timestamp("2026-09-25T14:40:00Z").unwrap());
+    let lesson = "Archmagus-Stack/Polyglot-Dev/Rust/2026-09-25-alpha/lesson.md";
+    let note = "agents/mail_room/Leo/2026-09-25-duha.md";
+    let manifest = r#"
+- date: 2026-09-25
+  lane: duha
+  registered_by: "_tools/register.py 2026-09-25T14:40Z"
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-25-alpha/lesson.html
+"#;
+    let trusted = ship_absent_lesson(manifest, note, "2026-09-25T14:40:00Z", None);
+    assert_eq!(trusted.status, "gap");
+    assert_eq!(trusted.missing, vec![lesson]);
+    let early = ship_absent_lesson(manifest, note, "2026-09-25T14:39:00Z", None);
+    assert_eq!(early.status, "stale");
+    assert!(early.missing.is_empty());
+    assert!(early.stale.contains(&lesson.to_string()));
+}
+
+#[test]
+fn revised_row_uses_latest_register_log() {
+    let lesson = "Archmagus-Stack/Polyglot-Dev/Rust/2026-09-25-trio/lesson.md";
+    let note = "agents/mail_room/Leo/2026-09-25-maghrib.md";
+    let manifest = r#"
+- date: 2026-09-25
+  revised: "2026-09-25T19:00:00Z"
+  registered_by: "_tools/register.py 2026-09-25T17:31Z"
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-25-trio/lesson.html
+"#;
+    let log = "\
+2026-09-25T19:54Z date=2026-09-25 lanes=maghrib gate=ok ok
+2026-09-25T19:55Z date=2026-09-25 lanes=asr maghrib=False gate=ok ok
+2026-09-25T23:01Z date=2026-09-25 lanes=maghrib gate=ok ok
+2026-09-25T23:02Z date=2026-09-25 lanes=maghrib gate=ok ok
+";
+    let early = ship_absent_lesson(manifest, note, "2026-09-25T19:31:00Z", Some(log));
+    assert_eq!(early.status, "stale");
+    assert!(
+        early.missing.is_empty(),
+        "watermark before the latest registration must not be missing"
+    );
+    assert!(early.stale.iter().any(|path| path == lesson));
+    let late = ship_absent_lesson(manifest, note, "2026-09-25T23:30:00Z", Some(log));
+    assert_eq!(late.status, "gap");
+    assert!(late.missing.iter().any(|path| path == lesson));
+}
+
+#[test]
+fn close_note_does_not_inherit_registration_time() {
+    let lesson = "Archmagus-Stack/Polyglot-Dev/Rust/2026-09-25-alpha/lesson.md";
+    let note = "agents/mail_room/Leo/2026-09-25-duha.md";
+    let manifest = r#"
+- date: 2026-09-25
+  lane: duha
+  registered_by: "2026-09-25T14:00:00Z"
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-25-alpha/lesson.html
+"#;
+    let lattice = LatticeFixture::build(
+        &[Doc {
+            path: lesson,
+            frontmatter: None,
+            indexed_at: "2026-09-25T14:10:00Z",
+        }],
+        "2026-09-25T18:00:00Z",
+        "2026-09-25T12:00:00Z",
+        "2026-06-07T13:55:36Z",
+    );
+    let mut hedron = StoreFixture::new();
+    let source = lattice.open();
+    let reports = reconcile_lesson_ships(
+        &mut hedron.store,
+        &hedron.token,
+        Ok(&source),
+        manifest,
+        &[lane(
+            "2026-09-25",
+            "duha",
+            Some("2026-09-25T21:00:00Z"),
+            None,
+        )],
+        None,
+        None,
+    )
+    .unwrap();
+    let stale = report(&reports, "duha");
+    assert_eq!(stale.status, "stale");
+    assert!(stale.missing.is_empty());
+    assert_eq!(stale.stale, vec![note]);
+    assert!(stale
+        .reasons
+        .iter()
+        .all(|reason| reason.reason != "close_note_missing"));
+
+    let later = LatticeFixture::build(
+        &[Doc {
+            path: lesson,
+            frontmatter: None,
+            indexed_at: "2026-09-25T14:10:00Z",
+        }],
+        "2026-09-25T21:00:00Z",
+        "2026-09-25T12:00:00Z",
+        "2026-06-07T13:55:36Z",
+    );
+    let source = later.open();
+    let reports = reconcile_lesson_ships(
+        &mut hedron.store,
+        &hedron.token,
+        Ok(&source),
+        manifest,
+        &[lane(
+            "2026-09-25",
+            "duha",
+            Some("2026-09-25T21:00:00Z"),
+            None,
+        )],
+        None,
+        None,
+    )
+    .unwrap();
+    let gap = report(&reports, "duha");
+    assert_eq!(gap.status, "gap");
+    assert_eq!(gap.missing, vec![note]);
+    assert_eq!(gap.reasons[0].reason, "close_note_missing");
+}
+
+fn ship_absent_lesson(
+    manifest: &str,
+    note: &str,
+    reconcile_at: &str,
+    register_log: Option<&str>,
+) -> LaneReport {
+    let lattice = LatticeFixture::build(
+        &[Doc {
+            path: note,
+            frontmatter: None,
+            indexed_at: reconcile_at,
+        }],
+        reconcile_at,
+        "2026-09-25T12:00:00Z",
+        "2026-06-07T13:55:36Z",
+    );
+    let mut hedron = StoreFixture::new();
+    let source = lattice.open();
+    let lane_name = if manifest.contains("lane:") {
+        "duha"
+    } else {
+        "maghrib"
+    };
+    let reports = reconcile_lesson_ships(
+        &mut hedron.store,
+        &hedron.token,
+        Ok(&source),
+        manifest,
+        &[lane(SCOPE_START, lane_name, None, None)],
+        None,
+        register_log,
+    )
+    .unwrap();
+    report(&reports, lane_name).clone()
 }

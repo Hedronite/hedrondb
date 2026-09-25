@@ -409,7 +409,11 @@ fn extract_wikilinks(body: &str) -> Vec<String> {
         if bytes[i] == b'[' && bytes[i + 1] == b'[' {
             if let Some(end) = body[i + 2..].find("]]") {
                 let inner = &body[i + 2..i + 2 + end];
-                let target = inner.split(['|', '#']).next().unwrap_or(inner).trim();
+                let target = inner
+                    .split(|c| c == '|' || c == '#')
+                    .next()
+                    .unwrap_or(inner)
+                    .trim();
                 if !target.is_empty() {
                     out.push(target.to_string());
                 }
@@ -427,7 +431,7 @@ fn store_mode(path: &Path) -> Result<u32, String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        Ok(meta.permissions().mode() & 0o777)
+        return Ok(meta.permissions().mode() & 0o777);
     }
     #[cfg(not(unix))]
     {

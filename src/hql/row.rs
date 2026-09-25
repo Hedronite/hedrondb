@@ -195,9 +195,7 @@ pub enum Row {
         ds: DesiredStateView,
     },
     /// Cool: one causal event.
-    History {
-        event: HistoryEventView,
-    },
+    History { event: HistoryEventView },
     /// Output of `select`: fixed columns over `source`; later stages still see
     /// the source node for traverse / search.
     Selected {
@@ -340,11 +338,7 @@ impl Row {
         }
         let owned: Vec<String> = match fields {
             Some(f) => f.to_vec(),
-            None => self
-                .default_fields()
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect(),
+            None => self.default_fields().iter().map(|s| (*s).to_string()).collect(),
         };
         owned
             .into_iter()
@@ -358,10 +352,7 @@ impl Row {
     /// What `search` scans: the node's path + extra, plus a walk's edge text.
     pub fn searchable_text(&self) -> String {
         let (to_raw, properties) = match self {
-            Row::Walk { edge, .. } => (
-                edge.to_raw.as_deref().unwrap_or(""),
-                edge.properties.as_str(),
-            ),
+            Row::Walk { edge, .. } => (edge.to_raw.as_deref().unwrap_or(""), edge.properties.as_str()),
             Row::Selected { source, .. } => return source.searchable_text(),
             _ => ("", ""),
         };

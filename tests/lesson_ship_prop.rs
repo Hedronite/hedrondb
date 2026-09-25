@@ -1,7 +1,9 @@
 //! Diff properties: missing is the intended set minus observed hits, in spec order.
 //! An untrusted absence stays out of `missing`.
 
-use hedron_core::{evaluate_requirements, DesiredState, LaneDue, ShipRequirement, SCOPE_START};
+use hedron_core::{
+    evaluate_requirements, DesiredState, LaneDue, LessonClockSpec, ShipRequirement, SCOPE_START,
+};
 use proptest::prelude::*;
 
 fn lesson_paths(n: usize) -> Vec<String> {
@@ -17,6 +19,7 @@ fn requirements(paths: &[String]) -> Vec<ShipRequirement> {
             path: path.clone(),
             role: "lesson_md".into(),
             reason: "missing_path".into(),
+            landed_hint: None,
         })
         .collect()
 }
@@ -74,16 +77,16 @@ proptest! {
         prop_assert_eq!(actual, report.shipped.len() as u64);
 
         let pairs: Vec<(&str, &str)> = paths.iter().map(|path| (path.as_str(), "lesson_md")).collect();
-        let spec = DesiredState::curriculum_clock_spec(
-            SCOPE_START,
-            "asr",
-            0,
-            0,
-            0,
-            paths.len() as u64,
-            &pairs,
-            None,
-        )
+        let spec = DesiredState::lesson_clock(LessonClockSpec {
+            date: SCOPE_START,
+            clock: "asr",
+            quiz_html: 0,
+            lab_refs: 0,
+            ship_note: 0,
+            lesson_md: paths.len() as u64,
+            required_paths: &pairs,
+            check_at: None,
+        })
         .unwrap();
         let evidence: Vec<serde_json::Value> = present
             .iter()

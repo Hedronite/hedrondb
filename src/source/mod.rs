@@ -6,11 +6,12 @@
 mod guard;
 mod lattice;
 mod manifest;
+mod register_log;
 mod ship;
 mod time;
 
 pub use guard::{judge_freshness, AbsenceCheck, GuardVerdict};
-pub use lattice::{IndexFreshness, LatticeRow, LatticeSource, RejectedWrite, SourceConfig};
+pub use lattice::{IndexFreshness, LatticeRow, LatticeSource, SourceConfig};
 pub use manifest::{
     close_note_path, lesson_md_path, parse_manifest, IntendedBundle, MANIFEST_FLOOR,
 };

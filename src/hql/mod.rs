@@ -31,10 +31,7 @@ enum Op {
     /// `history` / `history NAME`: causal events of the same selection.
     History(Option<String>),
     Search(String),
-    Traverse {
-        edge: String,
-        hops: i64,
-    },
+    Traverse { edge: String, hops: i64 },
     Filter(String),
     Select(Vec<String>),
     Limit(i64),

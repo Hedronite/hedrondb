@@ -4,15 +4,33 @@
 /// First lesson-ship date this slice evaluates. Earlier dates are ignored.
 pub const SCOPE_START: &str = "2026-09-25";
 
-/// Unix seconds. `None` when `raw` is not a timestamp we accept.
+/// Unix seconds. `None` when `raw` holds no timestamp we accept.
+///
+/// The stamp may sit after a prefix (`_tools/register.py 2026-09-25T14:40Z`).
+/// Seconds are optional and default to 0. A `Z` or `±HH:MM` zone may be
+/// followed by more text.
 pub fn parse_timestamp(raw: &str) -> Option<i64> {
     let s = raw.trim();
+    let bytes = s.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index].is_ascii_digit() {
+            if let Some(stamp) = parse_at(&s[index..]) {
+                return Some(stamp);
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
+fn parse_at(s: &str) -> Option<i64> {
     let b = s.as_bytes();
-    if b.len() < 19 {
+    if b.len() < 16 {
         return None;
     }
     let year = parse_digits(&b[0..4])?;
-    if b[4] != b'-' || b[7] != b'-' || b[13] != b':' || b[16] != b':' {
+    if b[4] != b'-' || b[7] != b'-' || b[13] != b':' {
         return None;
     }
     let month = parse_digits(&b[5..7])?;
@@ -22,7 +40,17 @@ pub fn parse_timestamp(raw: &str) -> Option<i64> {
     }
     let hour = parse_digits(&b[11..13])?;
     let minute = parse_digits(&b[14..16])?;
-    let second = parse_digits(&b[17..19])?;
+    let mut idx = 16;
+    let second = if b.get(idx) == Some(&b':') {
+        if b.len() < idx + 3 {
+            return None;
+        }
+        let second = parse_digits(&b[idx + 1..idx + 3])?;
+        idx += 3;
+        second
+    } else {
+        0
+    };
     if !(1..=12).contains(&month) || hour > 23 || minute > 59 || second > 60 {
         return None;
     }
@@ -31,24 +59,40 @@ pub fn parse_timestamp(raw: &str) -> Option<i64> {
     if !valid_ymd(year, month_u, day_u) {
         return None;
     }
-    let mut rest = &s[19..];
-    if rest.starts_with('.') {
-        let digits = rest[1..].chars().take_while(|c| c.is_ascii_digit()).count();
+    if idx < b.len() && b[idx] == b'.' {
+        if b.get(16) != Some(&b':') {
+            return None;
+        }
+        let digits = b[idx + 1..]
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
         if digits == 0 {
             return None;
         }
-        rest = &rest[1 + digits..];
+        idx += 1 + digits;
     }
-    let offset = if rest.is_empty() || rest == "Z" || rest == "z" {
-        0
-    } else {
-        parse_offset(rest)?
-    };
+    let offset = zone_offset(&s[idx..])?;
     let local = days_from_civil(year, month_u, day_u) * 86_400
         + i64::from(hour) * 3_600
         + i64::from(minute) * 60
         + i64::from(second);
     Some(local - offset)
+}
+
+/// `Z`, `±HH:MM`, or a missing zone (naive UTC). Trailing text is ignored.
+fn zone_offset(rest: &str) -> Option<i64> {
+    if rest.is_empty() {
+        return Some(0);
+    }
+    let b = rest.as_bytes();
+    if b[0] == b'Z' || b[0] == b'z' || b[0].is_ascii_whitespace() {
+        return Some(0);
+    }
+    if (b[0] == b'+' || b[0] == b'-') && rest.len() >= 6 {
+        return parse_offset(&rest[..6]);
+    }
+    None
 }
 
 /// `max(last_reconcile_at, last_full_pass_at)`. Does not read `last_indexer_at`.

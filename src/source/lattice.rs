@@ -79,13 +79,6 @@ pub struct IndexFreshness {
     pub watermark_unix: Option<i64>,
 }
 
-/// `SQLITE_READONLY` from a deliberate write on this handle.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RejectedWrite {
-    pub sqlite_code: i32,
-    pub message: String,
-}
-
 pub struct LatticeSource {
     conn: Connection,
     path: PathBuf,
@@ -173,26 +166,6 @@ impl LatticeSource {
         let sql =
             format!("{ROW_SQL} WHERE d.path GLOB ?1 AND {NOT_SUPERSEDED} ORDER BY d.path ASC");
         self.query(&sql, params![pattern])
-    }
-
-    /// An INSERT on this handle. Success is a bug; the file must stay unchanged.
-    pub fn rejected_write(&self) -> Result<RejectedWrite> {
-        match self.conn.execute(
-            "INSERT INTO documents (path, indexed_at) VALUES (?1, ?2)",
-            params!["__hedron_ro_probe__", "1970-01-01T00:00:00Z"],
-        ) {
-            Ok(_) => Err(Error::Invalid("lattice source accepted a write".into())),
-            Err(err) => {
-                let sqlite_code = match &err {
-                    rusqlite::Error::SqliteFailure(code, _) => code.extended_code,
-                    _ => 0,
-                };
-                Ok(RejectedWrite {
-                    sqlite_code,
-                    message: err.to_string(),
-                })
-            }
-        }
     }
 
     fn query(&self, sql: &str, params: impl rusqlite::Params) -> Result<Vec<LatticeRow>> {
@@ -306,5 +279,89 @@ fn map_source_error(err: rusqlite::Error) -> Error {
         },
         rusqlite::Error::InvalidPath(_) => Error::SourceUnreadable(err.to_string()),
         _ => Error::Sqlite(err),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::time::SystemTime;
+
+    use rusqlite::{params, Connection};
+
+    use super::{LatticeSource, SourceConfig};
+
+    const DDL: &str = "
+CREATE TABLE documents (
+  doc_id INTEGER PRIMARY KEY,
+  path TEXT UNIQUE NOT NULL,
+  doc_type TEXT,
+  frontmatter_json TEXT,
+  mtime REAL,
+  content_hash TEXT,
+  indexed_at TEXT NOT NULL
+);
+CREATE TABLE index_state (
+  id INTEGER PRIMARY KEY,
+  last_reconcile_at TEXT,
+  last_indexer_at TEXT,
+  last_full_pass_at TEXT,
+  document_count INTEGER
+);
+";
+
+    #[test]
+    fn g7_insert_is_sqlite_readonly() {
+        let dir = std::env::temp_dir().join(format!(
+            "hedron-lattice-ro-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lattice.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(DDL).unwrap();
+        conn.execute(
+            "INSERT INTO index_state (id, last_reconcile_at, last_indexer_at, last_full_pass_at, document_count)
+             VALUES (1, '2026-09-25T15:00:00Z', '2026-09-25T15:00:00Z', '2026-06-07T13:55:36Z', 0)",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let before = fingerprint(&path);
+        let source = LatticeSource::open(&SourceConfig::new(&path)).unwrap();
+        let err = source
+            .conn
+            .execute(
+                "INSERT INTO documents (path, indexed_at) VALUES (?1, ?2)",
+                params!["__hedron_ro_probe__", "1970-01-01T00:00:00Z"],
+            )
+            .expect_err("read-only lattice must reject INSERT");
+        let code = match &err {
+            rusqlite::Error::SqliteFailure(code, _) => code.extended_code,
+            _ => panic!("expected sqlite failure, got {err}"),
+        };
+        assert_eq!(code & 0xFF, rusqlite::ffi::SQLITE_READONLY, "{err}");
+        assert_eq!(fingerprint(&path), before);
+        let probes: i64 = Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM documents WHERE path = '__hedron_ro_probe__'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(probes, 0);
+        drop(source);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn fingerprint(path: &std::path::Path) -> (blake3::Hash, SystemTime) {
+        let bytes = fs::read(path).unwrap();
+        let modified = fs::metadata(path).unwrap().modified().unwrap();
+        (blake3::hash(&bytes), modified)
     }
 }
