@@ -1,4 +1,4 @@
-//! Golden G1–G9 for the read-only lesson-ship lattice source.
+//! Golden G1–G9 and G15–G20 for the read-only lesson-ship lattice source.
 //!
 //! Fixtures are built in a temp directory. Nothing here opens a live lattice.
 
@@ -8,8 +8,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use hedron_core::{
-    parse_manifest, parse_timestamp, reconcile_lesson_ships, walk_watermark, ConditionKind,
-    DesiredState, Error, LaneDue, LaneReport, LatticeSource, Node, SourceConfig, SCOPE_START,
+    default_lane_check_at, parse_manifest, parse_timestamp, reconcile_lesson_ships,
+    reconcile_lesson_ships_with, walk_watermark, BadRow, ConditionKind, DesiredState, Error,
+    HookAction, LaneDue, LaneReport, LatticeSource, ManifestHook, Node, ObserveBatch,
+    QuarantineOnBadRow, QuarantineStore, SourceConfig, SCOPE_START,
 };
 use rusqlite::{Connection, OpenFlags};
 use serde_yaml::Value;
@@ -126,6 +128,13 @@ fn report<'a>(reports: &'a [LaneReport], name: &str) -> &'a LaneReport {
         .iter()
         .find(|item| item.lane == name)
         .unwrap_or_else(|| panic!("missing lane {name}"))
+}
+
+fn report_on<'a>(reports: &'a [LaneReport], date: &str, name: &str) -> &'a LaneReport {
+    reports
+        .iter()
+        .find(|item| item.date == date && item.lane == name)
+        .unwrap_or_else(|| panic!("missing lane {name} on {date}"))
 }
 
 fn scalar_count(path: &Path, sql: &str) -> i64 {
@@ -999,8 +1008,9 @@ fn in_scope_duplicate_key_fails_closed() {
     )
     .unwrap();
     let blocked = report(&reports, "duha");
-    assert_eq!(blocked.status, "cannot_tell");
+    assert_eq!(blocked.status, "quarantined");
     assert!(blocked.missing.is_empty());
+    assert!(blocked.quarantine.is_some());
     assert_eq!(scalar_count(&hedron.path, "SELECT count(*) FROM events"), 0);
 }
 
@@ -1044,10 +1054,10 @@ fn revised_row_uses_latest_register_log() {
     source: Polyglot-Dev/Rust/2026-09-25-trio/lesson.html
 "#;
     let log = "\
-2026-09-25T19:54Z date=2026-09-25 lanes=maghrib gate=ok ok
-2026-09-25T19:55Z date=2026-09-25 lanes=asr maghrib=False gate=ok ok
-2026-09-25T23:01Z date=2026-09-25 lanes=maghrib gate=ok ok
-2026-09-25T23:02Z date=2026-09-25 lanes=maghrib gate=ok ok
+_tools/register.py 2026-09-25T19:54Z date=2026-09-25 trio=True ok
+_tools/register.py 2026-09-25T19:55Z date=2026-09-25 trio=True ok
+_tools/register.py 2026-09-25T23:01Z date=2026-09-25 trio=True ok
+_tools/register.py 2026-09-25T23:02Z date=2026-09-25 trio=True ok
 ";
     let early = ship_absent_lesson(manifest, note, "2026-09-25T19:31:00Z", Some(log));
     assert_eq!(early.status, "stale");
@@ -1174,4 +1184,505 @@ fn ship_absent_lesson(
     )
     .unwrap();
     report(&reports, lane_name).clone()
+}
+
+struct AbortHook;
+
+impl ManifestHook for AbortHook {
+    fn on_bad_row(&self, _bad: &BadRow) -> HookAction {
+        HookAction::Abort
+    }
+}
+
+fn lattice_with(paths: &[&str], indexed_at: &str, reconcile_at: &str) -> LatticeFixture {
+    let docs: Vec<Doc<'_>> = paths
+        .iter()
+        .copied()
+        .map(|path| Doc {
+            path,
+            frontmatter: None,
+            indexed_at,
+        })
+        .collect();
+    LatticeFixture::build(
+        &docs,
+        reconcile_at,
+        "2026-09-26T12:00:00Z",
+        "2026-06-07T13:55:36Z",
+    )
+}
+
+fn pass(
+    hedron: &mut StoreFixture,
+    lattice: &LatticeFixture,
+    manifest: &str,
+    lanes: &[LaneDue],
+    now: &str,
+    hook: &dyn ManifestHook,
+) -> ObserveBatch {
+    let source = lattice.open();
+    reconcile_lesson_ships_with(
+        &mut hedron.store,
+        &hedron.token,
+        Ok(&source),
+        manifest,
+        lanes,
+        None,
+        None,
+        hook,
+        parse_timestamp(now),
+    )
+    .unwrap()
+}
+
+#[test]
+fn g15_bad_row_quarantines_only_its_date() {
+    let d_prev = "2026-09-25";
+    let d = "2026-09-26";
+    let d_next = "2026-09-27";
+    let lesson_prev = "Archmagus-Stack/Polyglot-Dev/Rust/2026-09-25-alpha/lesson.md";
+    let note_prev = "agents/mail_room/Leo/2026-09-25-duha.md";
+    let lesson_next = "Archmagus-Stack/Polyglot-Dev/Rust/2026-09-27-alpha/lesson.md";
+    let note_next = "agents/mail_room/Leo/2026-09-27-duha.md";
+    let manifest = r#"
+- date: 2026-09-25
+  lane: duha
+  registered_by: "2026-09-25T14:00:00Z"
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-25-alpha/lesson.html
+- date: 2026-09-26
+  lane: duha
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-26-a/lesson.html
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-26-b/lesson.html
+- date: 2026-09-27
+  lane: duha
+  registered_by: "2026-09-27T14:00:00Z"
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-27-alpha/lesson.html
+"#;
+    let paths = [lesson_prev, note_prev, lesson_next, note_next];
+    let lattice = lattice_with(&paths, "2026-09-27T16:00:00Z", "2026-09-27T18:00:00Z");
+    let before = fingerprint(&lattice.path);
+    let mut hedron = StoreFixture::new();
+    let lanes = [
+        lane(d_prev, "duha", None, None),
+        lane(d, "duha", None, None),
+        lane(d_next, "duha", None, None),
+    ];
+    let batch = pass(
+        &mut hedron,
+        &lattice,
+        manifest,
+        &lanes,
+        "2026-09-27T18:00:00Z",
+        &QuarantineOnBadRow,
+    );
+    assert_eq!(report_on(&batch.lanes, d_prev, "duha").status, "warm");
+    assert_eq!(report_on(&batch.lanes, d_next, "duha").status, "warm");
+    let held = report_on(&batch.lanes, d, "duha");
+    assert_eq!(held.status, "quarantined");
+    assert!(held.missing.is_empty());
+    assert!(held.shipped.is_empty());
+    let mark = held.quarantine.as_ref().unwrap();
+    assert!(mark.row_span[0] >= 1 && mark.row_span[1] >= mark.row_span[0]);
+    assert_eq!(mark.row_hash.len(), 64);
+    assert!(mark.reason.contains(d), "{}", mark.reason);
+    assert_eq!(mark.first_seen_at, "2026-09-27T18:00:00Z");
+    assert_eq!(batch.quarantine.len(), 1);
+    assert_eq!(batch.quarantine[0].date.as_deref(), Some(d));
+    assert_eq!(batch.quarantine[0].lanes, vec!["duha".to_string()]);
+    assert!(batch.quarantine[0].is_active());
+    assert_eq!(scalar_count(&hedron.path, "SELECT count(*) FROM events"), 2);
+    assert_eq!(fingerprint(&lattice.path), before);
+}
+
+#[test]
+fn g16_bad_lane_inside_a_row_holds_only_that_lane() {
+    let lesson = "Archmagus-Stack/Polyglot-Dev/Rust/2026-09-26-alpha/lesson.md";
+    let note = "agents/mail_room/Leo/2026-09-26-duha.md";
+    let manifest = r#"
+- date: 2026-09-26
+  lane: duha
+  registered_by: "2026-09-26T14:00:00Z"
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-26-alpha/lesson.html
+  lane: asr
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-26-a/lesson.html
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-26-b/lesson.html
+"#;
+    let paths = [lesson, note];
+    let lattice = lattice_with(&paths, "2026-09-26T16:00:00Z", "2026-09-26T18:00:00Z");
+    let mut hedron = StoreFixture::new();
+    let lanes = [
+        lane("2026-09-26", "duha", None, None),
+        lane("2026-09-26", "asr", None, None),
+        lane(
+            "2026-09-26",
+            "maghrib",
+            Some("2026-09-26T12:00:00Z"),
+            None,
+        ),
+    ];
+    let batch = pass(
+        &mut hedron,
+        &lattice,
+        manifest,
+        &lanes,
+        "2026-09-26T18:00:00Z",
+        &QuarantineOnBadRow,
+    );
+    assert_eq!(report_on(&batch.lanes, "2026-09-26", "duha").status, "warm");
+    let asr = report_on(&batch.lanes, "2026-09-26", "asr");
+    assert_eq!(asr.status, "quarantined");
+    assert!(asr.missing.is_empty());
+    let maghrib = report_on(&batch.lanes, "2026-09-26", "maghrib");
+    assert_eq!(maghrib.status, "gap");
+    assert_eq!(batch.quarantine.len(), 1);
+    assert_eq!(batch.quarantine[0].lanes, vec!["asr".to_string()]);
+}
+
+#[test]
+fn g17_undated_bad_row_holds_only_dates_without_a_good_row() {
+    let lesson_prev = "Archmagus-Stack/Polyglot-Dev/Rust/2026-09-25-alpha/lesson.md";
+    let note_prev = "agents/mail_room/Leo/2026-09-25-duha.md";
+    let lesson_next = "Archmagus-Stack/Polyglot-Dev/Rust/2026-09-27-alpha/lesson.md";
+    let note_next = "agents/mail_room/Leo/2026-09-27-duha.md";
+    let manifest = r#"
+- date: 2026-09-25
+  lane: duha
+  registered_by: "2026-09-25T14:00:00Z"
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-25-alpha/lesson.html
+- [not a mapping
+- date: 2026-09-27
+  lane: duha
+  registered_by: "2026-09-27T14:00:00Z"
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-27-alpha/lesson.html
+"#;
+    let paths = [lesson_prev, note_prev, lesson_next, note_next];
+    let lattice = lattice_with(&paths, "2026-09-27T16:00:00Z", "2026-09-27T18:00:00Z");
+    let mut hedron = StoreFixture::new();
+    let lanes = [
+        lane("2026-09-25", "duha", None, None),
+        lane(
+            "2026-09-25",
+            "asr",
+            Some("2026-09-25T12:00:00Z"),
+            None,
+        ),
+        lane("2026-09-26", "duha", None, None),
+        lane("2026-09-27", "duha", None, None),
+    ];
+    let batch = pass(
+        &mut hedron,
+        &lattice,
+        manifest,
+        &lanes,
+        "2026-09-27T18:00:00Z",
+        &QuarantineOnBadRow,
+    );
+    assert_eq!(report_on(&batch.lanes, "2026-09-25", "duha").status, "warm");
+    let asr = report_on(&batch.lanes, "2026-09-25", "asr");
+    assert_ne!(asr.status, "quarantined");
+    assert_eq!(asr.status, "gap");
+    let held = report_on(&batch.lanes, "2026-09-26", "duha");
+    assert_eq!(held.status, "quarantined");
+    assert!(held.missing.is_empty());
+    assert!(held.quarantine.as_ref().unwrap().reason.contains("undated"));
+    assert_eq!(report_on(&batch.lanes, "2026-09-27", "duha").status, "warm");
+    assert_eq!(batch.quarantine.len(), 1);
+    assert!(batch.quarantine[0].date.is_none());
+}
+
+#[test]
+fn g18_flag_persists_then_auto_clears_when_the_row_parses() {
+    let bad = r#"
+- date: 2026-09-26
+  lane: duha
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-26-a/lesson.html
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-26-b/lesson.html
+"#;
+    let fixed = r#"
+- date: 2026-09-26
+  lane: duha
+  registered_by: "2026-09-26T14:00:00Z"
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-26-alpha/lesson.html
+"#;
+    let lesson = "Archmagus-Stack/Polyglot-Dev/Rust/2026-09-26-alpha/lesson.md";
+    let note = "agents/mail_room/Leo/2026-09-26-duha.md";
+    let paths = [lesson, note];
+    let lattice = lattice_with(&paths, "2026-09-26T16:00:00Z", "2026-09-26T18:00:00Z");
+    let mut hedron = StoreFixture::new();
+    let lanes = [lane("2026-09-26", "duha", None, None)];
+    let first = pass(
+        &mut hedron,
+        &lattice,
+        bad,
+        &lanes,
+        "2026-09-26T18:00:00Z",
+        &QuarantineOnBadRow,
+    );
+    assert_eq!(first.lanes[0].status, "quarantined");
+    let hash = first.lanes[0].quarantine.as_ref().unwrap().row_hash.clone();
+    assert_eq!(
+        first.lanes[0].quarantine.as_ref().unwrap().first_seen_at,
+        "2026-09-26T18:00:00Z"
+    );
+    let second = pass(
+        &mut hedron,
+        &lattice,
+        bad,
+        &lanes,
+        "2026-09-26T19:00:00Z",
+        &QuarantineOnBadRow,
+    );
+    assert_eq!(second.lanes[0].status, "quarantined");
+    let mark = second.lanes[0].quarantine.as_ref().unwrap();
+    assert_eq!(mark.first_seen_at, "2026-09-26T18:00:00Z");
+    assert_eq!(mark.row_hash, hash);
+    let stored = QuarantineStore::list(&hedron.store).unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].first_seen_at, "2026-09-26T18:00:00Z");
+    assert_eq!(stored[0].last_seen_at, "2026-09-26T19:00:00Z");
+    assert!(stored[0].cleared_at.is_none());
+    let third = pass(
+        &mut hedron,
+        &lattice,
+        fixed,
+        &lanes,
+        "2026-09-26T20:00:00Z",
+        &QuarantineOnBadRow,
+    );
+    assert_eq!(third.lanes[0].status, "warm");
+    assert!(third.quarantine.is_empty());
+    let stored = QuarantineStore::list(&hedron.store).unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].row_hash, hash);
+    assert_eq!(stored[0].cleared_at.as_deref(), Some("2026-09-26T20:00:00Z"));
+    assert_eq!(scalar_count(&hedron.path, "SELECT count(*) FROM events"), 1);
+}
+
+#[test]
+fn g19_abort_hook_locks_every_in_scope_lane() {
+    let manifest = r#"
+- date: 2026-09-25
+  lane: duha
+  registered_by: "2026-09-25T14:00:00Z"
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-25-alpha/lesson.html
+- date: 2026-09-26
+  lane: duha
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-26-a/lesson.html
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-26-b/lesson.html
+"#;
+    let lesson = "Archmagus-Stack/Polyglot-Dev/Rust/2026-09-25-alpha/lesson.md";
+    let note = "agents/mail_room/Leo/2026-09-25-duha.md";
+    let paths = [lesson, note];
+    let lattice = lattice_with(&paths, "2026-09-26T16:00:00Z", "2026-09-26T18:00:00Z");
+    let mut hedron = StoreFixture::new();
+    seed_untouched(&mut hedron);
+    let lanes = [
+        lane("2026-09-24", "duha", None, None),
+        lane("2026-09-25", "duha", None, None),
+        lane("2026-09-26", "asr", None, None),
+    ];
+    let batch = pass(
+        &mut hedron,
+        &lattice,
+        manifest,
+        &lanes,
+        "2026-09-26T18:00:00Z",
+        &AbortHook,
+    );
+    assert_eq!(report_on(&batch.lanes, "2026-09-24", "duha").status, "not_evaluated");
+    assert_eq!(report_on(&batch.lanes, "2026-09-25", "duha").status, "cannot_tell");
+    assert_eq!(report_on(&batch.lanes, "2026-09-26", "asr").status, "cannot_tell");
+    assert!(batch.quarantine.is_empty());
+    assert_seed_untouched(&hedron.path);
+}
+
+#[test]
+fn g20_legacy_row_is_preacked_and_does_not_block() {
+    let legacy = r#"
+- date: 2026-06-23
+  lane: duha
+  cert:
+    source: Polyglot-Dev/Old/2026-06-23-a/lesson.html
+  cert:
+    source: Polyglot-Dev/Old/2026-06-23-b/lesson.html
+"#;
+    let lesson = "Archmagus-Stack/Polyglot-Dev/Rust/2026-09-25-alpha/lesson.md";
+    let note = "agents/mail_room/Leo/2026-09-25-duha.md";
+    let manifest = format!(
+        "{legacy}\
+- date: 2026-09-25
+  lane: duha
+  registered_by: \"2026-09-25T14:00:00Z\"
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-25-alpha/lesson.html
+"
+    );
+    let paths = [lesson, note];
+    let lattice = lattice_with(&paths, "2026-09-25T16:00:00Z", "2026-09-25T18:00:00Z");
+    let mut hedron = StoreFixture::new();
+    let lanes = [lane("2026-09-25", "duha", None, None)];
+    let batch = pass(
+        &mut hedron,
+        &lattice,
+        &manifest,
+        &lanes,
+        "2026-09-25T18:00:00Z",
+        &QuarantineOnBadRow,
+    );
+    assert_eq!(batch.lanes[0].status, "warm");
+    assert!(batch.quarantine.is_empty());
+    let stored = QuarantineStore::list(&hedron.store).unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].reason, "legacy");
+    assert_eq!(stored[0].acked_by.as_deref(), Some("legacy"));
+    assert!(stored[0].cleared_at.is_some());
+    assert!(!stored[0].is_active());
+    let again = pass(
+        &mut hedron,
+        &lattice,
+        &manifest,
+        &lanes,
+        "2026-09-25T19:00:00Z",
+        &QuarantineOnBadRow,
+    );
+    assert_eq!(again.lanes[0].status, "warm");
+    let stored = QuarantineStore::list(&hedron.store).unwrap();
+    assert_eq!(stored.len(), 1, "a legacy row is logged once");
+    assert_eq!(stored[0].first_seen_at, "2026-09-25T18:00:00Z");
+}
+
+#[test]
+fn acked_flag_releases_the_lane() {
+    let manifest = r#"
+- date: 2026-09-26
+  lane: duha
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-26-a/lesson.html
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-26-b/lesson.html
+"#;
+    let lattice = LatticeFixture::build(
+        &[],
+        "2026-09-26T18:00:00Z",
+        "2026-09-26T12:00:00Z",
+        "2026-06-07T13:55:36Z",
+    );
+    let mut hedron = StoreFixture::new();
+    let lanes = [lane(
+        "2026-09-26",
+        "duha",
+        Some("2026-09-26T12:00:00Z"),
+        None,
+    )];
+    let first = pass(
+        &mut hedron,
+        &lattice,
+        manifest,
+        &lanes,
+        "2026-09-26T18:00:00Z",
+        &QuarantineOnBadRow,
+    );
+    assert_eq!(first.lanes[0].status, "quarantined");
+    let hash = first.lanes[0].quarantine.as_ref().unwrap().row_hash.clone();
+    hedron
+        .store
+        .ack(&hash, "evan", "2026-09-26T18:30:00Z")
+        .unwrap();
+    let second = pass(
+        &mut hedron,
+        &lattice,
+        manifest,
+        &lanes,
+        "2026-09-26T19:00:00Z",
+        &QuarantineOnBadRow,
+    );
+    assert_ne!(second.lanes[0].status, "quarantined");
+    assert_eq!(second.lanes[0].status, "gap");
+    assert!(second.quarantine.is_empty());
+    let stored = QuarantineStore::list(&hedron.store).unwrap();
+    assert_eq!(stored[0].acked_by.as_deref(), Some("evan"));
+}
+
+#[test]
+fn sniff_date_reads_a_later_top_level_key_not_a_nested_one() {
+    let good = r#"
+- lane: duha
+  registered_by: "2026-09-25T14:00:00Z"
+  date: 2026-09-25
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-25-alpha/lesson.html
+"#;
+    let bundles = parse_manifest(good).unwrap();
+    assert_eq!(bundles.len(), 1);
+    assert_eq!(bundles[0].date, "2026-09-25");
+    let lesson = "Archmagus-Stack/Polyglot-Dev/Rust/2026-09-25-alpha/lesson.md";
+    let note = "agents/mail_room/Leo/2026-09-25-duha.md";
+    let manifest = r#"
+- lane: duha
+  registered_by: "2026-09-25T14:00:00Z"
+  date: 2026-09-25
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-25-alpha/lesson.html
+- lane: duha
+  dev:
+    date: 1999-01-01
+    source: Polyglot-Dev/Rust/nested/lesson.html
+  date: 2026-09-26
+  dev:
+    source: Polyglot-Dev/Rust/2026-09-26-b/lesson.html
+"#;
+    let paths = [lesson, note];
+    let lattice = lattice_with(&paths, "2026-09-26T16:00:00Z", "2026-09-26T18:00:00Z");
+    let mut hedron = StoreFixture::new();
+    let lanes = [
+        lane("2026-09-25", "duha", None, None),
+        lane("2026-09-26", "duha", None, None),
+    ];
+    let batch = pass(
+        &mut hedron,
+        &lattice,
+        manifest,
+        &lanes,
+        "2026-09-26T18:00:00Z",
+        &QuarantineOnBadRow,
+    );
+    assert_eq!(report_on(&batch.lanes, "2026-09-25", "duha").status, "warm");
+    let held = report_on(&batch.lanes, "2026-09-26", "duha");
+    assert_eq!(held.status, "quarantined");
+    assert!(
+        held.quarantine.as_ref().unwrap().reason.contains("2026-09-26"),
+        "{}",
+        held.quarantine.as_ref().unwrap().reason
+    );
+    assert!(
+        !held.quarantine.as_ref().unwrap().reason.contains("1999-01-01"),
+        "nested date must not set the blast radius"
+    );
+    assert_eq!(batch.quarantine[0].date.as_deref(), Some("2026-09-26"));
+}
+
+#[test]
+fn default_check_at_follows_new_york_across_the_fall_back() {
+    let before = default_lane_check_at("2026-10-31", "maghrib").unwrap();
+    let after = default_lane_check_at("2026-11-02", "maghrib").unwrap();
+    assert_eq!(before, "2026-10-31T20:35:00-04:00");
+    assert_eq!(after, "2026-11-02T20:35:00-05:00");
+    let early = parse_timestamp(&before).unwrap();
+    let late = parse_timestamp(&after).unwrap();
+    assert_eq!(late - early, 49 * 3_600);
 }

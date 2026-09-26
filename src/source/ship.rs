@@ -10,8 +10,13 @@ use crate::error::{Error, Result};
 use crate::reconcile::adapt_lapis_observe;
 use crate::source::guard::{judge_freshness, AbsenceCheck, GuardVerdict};
 use crate::source::lattice::{IndexFreshness, LatticeSource};
+use crate::quarantine::{
+    BadRow, HookAction, ManifestHook, ManifestQuarantine, MemoryQuarantineStore,
+    QuarantineOnBadRow, QuarantineStore,
+};
 use crate::source::manifest::{
-    close_note_path, is_superseded_path, lab_ref_path, parse_manifest, IntendedBundle,
+    close_note_path, is_superseded_path, lab_ref_path, partition_manifest, IntendedBundle,
+    ManifestPartition,
 };
 use crate::source::register_log::RegisterLog;
 use crate::source::time::{format_unix_utc, parse_timestamp, SCOPE_START};
@@ -58,9 +63,21 @@ pub struct LaneReport {
     pub missing: Vec<String>,
     pub stale: Vec<String>,
     pub cannot_tell: Option<String>,
+    /// Set when `status` is `quarantined`. Fail-closed for this lane only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quarantine: Option<RowQuarantine>,
     pub reasons: Vec<PathReason>,
     pub watermark_utc: Option<String>,
     pub counts: Option<serde_json::Value>,
+}
+
+/// Identity of the bad manifest row holding this lane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RowQuarantine {
+    pub row_span: [usize; 2],
+    pub row_hash: String,
+    pub reason: String,
+    pub first_seen_at: String,
 }
 
 struct ReconcilePlan {
@@ -77,6 +94,8 @@ pub struct ObserveBatch {
     pub document_count: Option<i64>,
     pub live_count: Option<i64>,
     pub lanes: Vec<LaneReport>,
+    /// Active quarantine flags. Acked and auto-cleared rows are omitted.
+    pub quarantine: Vec<ManifestQuarantine>,
     #[serde(skip)]
     plans: Vec<Option<ReconcilePlan>>,
 }
@@ -122,6 +141,7 @@ pub fn cannot_tell_batch(lanes: &[LaneDue], err: &Error) -> ObserveBatch {
         document_count: None,
         live_count: None,
         lanes: reports,
+        quarantine: Vec::new(),
         plans: std::iter::repeat_with(|| None).take(lanes.len()).collect(),
     }
 }
@@ -133,19 +153,69 @@ pub fn observe_lesson_ships(
     as_of_unix: Option<i64>,
     register_log: Option<&str>,
 ) -> Result<ObserveBatch> {
+    let mut quarantine = MemoryQuarantineStore::new();
+    observe_lesson_ships_with(
+        source,
+        manifest_yaml,
+        lanes,
+        as_of_unix,
+        register_log,
+        &QuarantineOnBadRow,
+        &mut quarantine,
+        None,
+    )
+}
+
+/// Same pass as [`observe_lesson_ships`], with an explicit hook, flag store,
+/// and clock. `now_unix` stamps `first_seen_at` / `last_seen_at`.
+pub fn observe_lesson_ships_with(
+    source: &LatticeSource,
+    manifest_yaml: &str,
+    lanes: &[LaneDue],
+    as_of_unix: Option<i64>,
+    register_log: Option<&str>,
+    hook: &dyn ManifestHook,
+    quarantine: &mut dyn QuarantineStore,
+    now_unix: Option<i64>,
+) -> Result<ObserveBatch> {
     let freshness = source.freshness()?;
-    let bundles = parse_manifest(manifest_yaml)?;
+    let part = partition_manifest(manifest_yaml)?;
+    let now = format_unix_utc(now_unix.unwrap_or_else(unix_now));
+    let flags = match sync_flags(quarantine, &part, hook, &now)? {
+        SyncFlags::Abort(reason) => {
+            let mut batch = cannot_tell_batch(lanes, &Error::Invalid(reason));
+            batch.watermark_utc = freshness.watermark_unix.map(format_unix_utc);
+            batch.last_reconcile_at = freshness.last_reconcile_at.clone();
+            batch.last_full_pass_at = freshness.last_full_pass_at.clone();
+            batch.last_indexer_at = freshness.last_indexer_at.clone();
+            batch.document_count = freshness.document_count;
+            batch.live_count = Some(freshness.live_count);
+            for report in &mut batch.lanes {
+                if report.status == "cannot_tell" {
+                    report.watermark_utc.clone_from(&batch.watermark_utc);
+                }
+            }
+            return Ok(batch);
+        }
+        SyncFlags::Holding(flags) => flags,
+    };
+    let active: Vec<&ManifestQuarantine> = flags.iter().filter(|flag| flag.is_active()).collect();
+    let good_pairs = part
+        .bundles
+        .iter()
+        .map(|bundle| (bundle.date.clone(), bundle.lane.clone()))
+        .collect::<Vec<_>>();
     let register_log = RegisterLog::parse(register_log.unwrap_or(""));
     let watermark_utc = freshness.watermark_unix.map(format_unix_utc);
     let mut prepared = Vec::with_capacity(lanes.len());
     let mut exact_paths = Vec::new();
     let mut glob_hits = Vec::new();
     for lane in lanes {
-        if !in_scope(&lane.date) {
+        if !in_scope(&lane.date) || hold_for(lane, &active, &good_pairs).is_some() {
             prepared.push(None);
             continue;
         }
-        let (reqs, extra) = requirements_for(source, lane, &bundles, &register_log)?;
+        let (reqs, extra) = requirements_for(source, lane, &part.bundles, &register_log)?;
         for req in &reqs {
             if is_exact_path(&req.path) {
                 exact_paths.push(req.path.clone());
@@ -160,6 +230,16 @@ pub fn observe_lesson_ships(
     let mut reports = Vec::with_capacity(lanes.len());
     let mut plans = Vec::with_capacity(lanes.len());
     for (lane, reqs) in lanes.iter().zip(prepared) {
+        if !in_scope(&lane.date) {
+            reports.push(not_evaluated(lane));
+            plans.push(None);
+            continue;
+        }
+        if let Some(flag) = hold_for(lane, &active, &good_pairs) {
+            reports.push(quarantined_report(lane, flag, watermark_utc.clone()));
+            plans.push(None);
+            continue;
+        }
         let Some(reqs) = reqs else {
             reports.push(not_evaluated(lane));
             plans.push(None);
@@ -190,6 +270,7 @@ pub fn observe_lesson_ships(
         document_count: freshness.document_count,
         live_count: Some(freshness.live_count),
         lanes: reports,
+        quarantine: active.into_iter().cloned().collect(),
         plans,
     })
 }
@@ -203,17 +284,207 @@ pub fn reconcile_lesson_ships(
     as_of_unix: Option<i64>,
     register_log: Option<&str>,
 ) -> Result<Vec<LaneReport>> {
+    Ok(reconcile_lesson_ships_with(
+        store,
+        token,
+        opened,
+        manifest_yaml,
+        lanes,
+        as_of_unix,
+        register_log,
+        &QuarantineOnBadRow,
+        None,
+    )?
+    .lanes)
+}
+
+/// [`reconcile_lesson_ships`] with an explicit hook and clock. Flags are
+/// upserted into `store` (Hedron state), never into the lattice.
+pub fn reconcile_lesson_ships_with(
+    store: &mut Store,
+    token: &str,
+    opened: std::result::Result<&LatticeSource, &Error>,
+    manifest_yaml: &str,
+    lanes: &[LaneDue],
+    as_of_unix: Option<i64>,
+    register_log: Option<&str>,
+    hook: &dyn ManifestHook,
+    now_unix: Option<i64>,
+) -> Result<ObserveBatch> {
     let batch = match opened {
         Ok(source) => {
-            match observe_lesson_ships(source, manifest_yaml, lanes, as_of_unix, register_log) {
+            match observe_lesson_ships_with(
+                source,
+                manifest_yaml,
+                lanes,
+                as_of_unix,
+                register_log,
+                hook,
+                store,
+                now_unix,
+            ) {
                 Ok(batch) => batch,
-                Err(err) => return Ok(cannot_tell_batch(lanes, &err).lanes),
+                Err(err) => return Ok(cannot_tell_batch(lanes, &err)),
             }
         }
-        Err(err) => return Ok(cannot_tell_batch(lanes, err).lanes),
+        Err(err) => return Ok(cannot_tell_batch(lanes, err)),
     };
     batch.persist(store, token)?;
-    Ok(batch.lanes)
+    Ok(batch)
+}
+
+enum SyncFlags {
+    Holding(Vec<ManifestQuarantine>),
+    Abort(String),
+}
+
+fn sync_flags(
+    store: &mut dyn QuarantineStore,
+    part: &ManifestPartition,
+    hook: &dyn ManifestHook,
+    now: &str,
+) -> Result<SyncFlags> {
+    for legacy in &part.legacy {
+        remember_legacy(store, legacy, now)?;
+    }
+    let mut abort = None;
+    for bad in &part.bad {
+        if hook.on_bad_row(bad) == HookAction::Abort && abort.is_none() {
+            abort = Some(bad.reason.clone());
+        }
+    }
+    if let Some(reason) = abort {
+        return Ok(SyncFlags::Abort(reason));
+    }
+    for bad in &part.bad {
+        touch_bad(store, bad, now)?;
+    }
+    auto_clear(store, part, now)?;
+    Ok(SyncFlags::Holding(store.list()?))
+}
+
+fn remember_legacy(store: &mut dyn QuarantineStore, bad: &BadRow, now: &str) -> Result<()> {
+    if store.get(&bad.row_hash)?.is_some() {
+        return Ok(());
+    }
+    store.upsert(&ManifestQuarantine {
+        row_hash: bad.row_hash.clone(),
+        date: bad.date.clone(),
+        lanes: bad.lanes.clone(),
+        reason: "legacy".into(),
+        first_seen_at: now.to_string(),
+        last_seen_at: now.to_string(),
+        cleared_at: Some(now.to_string()),
+        acked_by: Some("legacy".into()),
+        row_span: bad.row_span,
+    })
+}
+
+fn touch_bad(store: &mut dyn QuarantineStore, bad: &BadRow, now: &str) -> Result<()> {
+    if let Some(existing) = store.get(&bad.row_hash)? {
+        if existing.acked_by.is_some() {
+            return Ok(());
+        }
+        store.upsert(&ManifestQuarantine {
+            row_hash: existing.row_hash,
+            date: bad.date.clone(),
+            lanes: bad.lanes.clone(),
+            reason: bad.reason.clone(),
+            first_seen_at: existing.first_seen_at,
+            last_seen_at: now.to_string(),
+            cleared_at: None,
+            acked_by: None,
+            row_span: bad.row_span,
+        })?;
+        return Ok(());
+    }
+    store.upsert(&ManifestQuarantine {
+        row_hash: bad.row_hash.clone(),
+        date: bad.date.clone(),
+        lanes: bad.lanes.clone(),
+        reason: bad.reason.clone(),
+        first_seen_at: now.to_string(),
+        last_seen_at: now.to_string(),
+        cleared_at: None,
+        acked_by: None,
+        row_span: bad.row_span,
+    })
+}
+
+fn auto_clear(store: &mut dyn QuarantineStore, part: &ManifestPartition, now: &str) -> Result<()> {
+    let flags = store.list()?;
+    for flag in flags {
+        if !flag.is_active() {
+            continue;
+        }
+        let Some(row) = part.rows.iter().find(|row| row.span[0] == flag.row_span[0]) else {
+            continue;
+        };
+        if row.good && row.hash != flag.row_hash {
+            let mut cleared = flag;
+            cleared.cleared_at = Some(now.to_string());
+            cleared.last_seen_at = now.to_string();
+            store.upsert(&cleared)?;
+        }
+    }
+    Ok(())
+}
+
+fn hold_for<'a>(
+    lane: &LaneDue,
+    active: &[&'a ManifestQuarantine],
+    good_pairs: &[(String, String)],
+) -> Option<&'a ManifestQuarantine> {
+    if !in_scope(&lane.date) {
+        return None;
+    }
+    let date_has_good = good_pairs.iter().any(|(date, _)| date == &lane.date);
+    let lane_has_good = good_pairs
+        .iter()
+        .any(|(date, name)| date == &lane.date && name == &lane.lane);
+    active.iter().copied().find(|flag| match &flag.date {
+        Some(date) if date == &lane.date => {
+            if lane_has_good {
+                return false;
+            }
+            flag.lanes.is_empty() || flag.lanes.iter().any(|name| name == &lane.lane)
+        }
+        None => !date_has_good,
+        Some(_) => false,
+    })
+}
+
+fn quarantined_report(
+    lane: &LaneDue,
+    flag: &ManifestQuarantine,
+    watermark_utc: Option<String>,
+) -> LaneReport {
+    LaneReport {
+        date: lane.date.clone(),
+        lane: lane.lane.clone(),
+        subject: subject_name(&lane.lane, &lane.date),
+        status: "quarantined".into(),
+        shipped: Vec::new(),
+        missing: Vec::new(),
+        stale: Vec::new(),
+        cannot_tell: None,
+        quarantine: Some(RowQuarantine {
+            row_span: flag.row_span,
+            row_hash: flag.row_hash.clone(),
+            reason: flag.reason.clone(),
+            first_seen_at: flag.first_seen_at.clone(),
+        }),
+        reasons: Vec::new(),
+        watermark_utc,
+        counts: None,
+    }
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|dur| dur.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Pure diff for one lane after hits are known. `missing` comes from
@@ -278,6 +549,7 @@ fn decide(
                     missing: Vec::new(),
                     stale: Vec::new(),
                     cannot_tell: None,
+                    quarantine: None,
                     reasons: Vec::new(),
                     watermark_utc,
                     counts: None,
@@ -306,6 +578,7 @@ fn decide(
                 missing: Vec::new(),
                 stale: untrusted,
                 cannot_tell: None,
+                quarantine: None,
                 reasons: Vec::new(),
                 watermark_utc,
                 counts: None,
@@ -336,6 +609,7 @@ fn decide(
             missing,
             stale: Vec::new(),
             cannot_tell: None,
+            quarantine: None,
             reasons,
             watermark_utc,
             counts: Some(counts),
@@ -558,6 +832,7 @@ fn cannot_tell_report(lane: &LaneDue, detail: &str, watermark_utc: Option<String
         missing: Vec::new(),
         stale: Vec::new(),
         cannot_tell: Some(detail.to_string()),
+        quarantine: None,
         reasons: Vec::new(),
         watermark_utc,
         counts: None,
@@ -574,6 +849,7 @@ fn not_evaluated(lane: &LaneDue) -> LaneReport {
         missing: Vec::new(),
         stale: Vec::new(),
         cannot_tell: None,
+        quarantine: None,
         reasons: Vec::new(),
         watermark_utc: None,
         counts: None,

@@ -111,6 +111,47 @@ pub fn walk_watermark(
     }
 }
 
+/// Wall-clock `America/New_York` for one lane, resolved on `date`.
+///
+/// Duha 11:00, dhuhr 13:45, asr 17:45, maghrib 20:35. The offset follows the
+/// zone (EDT `-04:00` or EST `-05:00`), so the 2026-11-01 fall-back does not
+/// leave November an hour early.
+pub fn default_lane_check_at(date: &str, lane: &str) -> Option<String> {
+    let (hour, minute, second) = match lane {
+        "duha" => (11, 0, 0),
+        "dhuhr" => (13, 45, 0),
+        "asr" => (17, 45, 0),
+        "maghrib" => (20, 35, 0),
+        _ => return None,
+    };
+    new_york_wall_time(date, hour, minute, second)
+}
+
+/// `date` at `hour:minute:second` in America/New_York, as an ISO stamp with
+/// the offset that zone uses on that date.
+pub fn new_york_wall_time(date: &str, hour: i8, minute: i8, second: i8) -> Option<String> {
+    let bytes = date.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return None;
+    }
+    let year: i16 = date[0..4].parse().ok()?;
+    let month: i8 = date[5..7].parse().ok()?;
+    let day: i8 = date[8..10].parse().ok()?;
+    let civil = jiff::civil::Date::new(year, month, day).ok()?;
+    let zoned = civil
+        .at(hour, minute, second, 0)
+        .in_tz("America/New_York")
+        .ok()?;
+    let offset = zoned.offset().seconds();
+    let sign = if offset < 0 { '-' } else { '+' };
+    let abs = offset.unsigned_abs();
+    let hh = abs / 3_600;
+    let mm = (abs % 3_600) / 60;
+    Some(format!(
+        "{date}T{hour:02}:{minute:02}:{second:02}{sign}{hh:02}:{mm:02}"
+    ))
+}
+
 pub fn format_unix_utc(secs: i64) -> String {
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400) as u32;

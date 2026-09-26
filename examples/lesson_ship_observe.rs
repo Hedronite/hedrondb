@@ -21,9 +21,15 @@
 //! another lane as this lane's lesson.
 //!
 //! Each lane gets a default `check_at` unless `--check-at` sets that lane.
-//! The stand-in is September EDT (UTC-4): duha 11:00, dhuhr 13:45, asr
-//! 17:45 (fire plus grace), maghrib 20:35. DST ends 2026-11-01; this offset
-//! is not a zone database. A lane before that time reports `pending`.
+//! Those are wall-clock America/New_York times resolved for `--date`:
+//! duha 11:00, dhuhr 13:45, asr 17:45 (fire plus grace), maghrib 20:35.
+//! A lane before that time reports `pending`.
+//!
+//! A malformed in-scope manifest row quarantines only the lanes it could
+//! describe. The JSON object includes a `quarantine` array of active flags.
+//! This binary does not open a HedronDB store, so the flags it prints are
+//! this pass only. `reconcile_lesson_ships` upserts the same flags into
+//! Hedron state.
 //!
 //! `register.log` is read from `{manifest_dir}/_tools/register.log` when that
 //! file exists. `--register-log` overrides the path. A missing default log is
@@ -38,8 +44,8 @@ use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hedron_core::{
-    cannot_tell_batch, observe_lesson_ships, Error, LaneDue, LatticeSource, ObserveBatch,
-    SourceConfig,
+    cannot_tell_batch, default_lane_check_at, observe_lesson_ships, Error, LaneDue, LatticeSource,
+    ObserveBatch, SourceConfig,
 };
 
 fn main() -> ExitCode {
@@ -105,6 +111,7 @@ fn print_batch(args: &Args, batch: &ObserveBatch) {
         "document_count": batch.document_count,
         "live_count": batch.live_count,
         "lanes": batch.lanes,
+        "quarantine": batch.quarantine,
     });
     match serde_json::to_string_pretty(&body) {
         Ok(text) => println!("{text}"),
@@ -194,17 +201,10 @@ impl Args {
     }
 }
 
-/// EDT stand-in. Asr and maghrib match the design card; duha and dhuhr are
-/// morning and midday placeholders until Fire Watch is parsed.
+/// America/New_York wall clock. Asr and maghrib match the design card; duha
+/// and dhuhr are morning and midday placeholders until Fire Watch is parsed.
 fn default_check_at(date: &str, lane: &str) -> Option<String> {
-    let clock = match lane {
-        "duha" => "11:00:00",
-        "dhuhr" => "13:45:00",
-        "asr" => "17:45:00",
-        "maghrib" => "20:35:00",
-        _ => return None,
-    };
-    Some(format!("{date}T{clock}-04:00"))
+    default_lane_check_at(date, lane)
 }
 
 fn load_register_log(

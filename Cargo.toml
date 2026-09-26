@@ -12,6 +12,9 @@ default-run = "hedron"
 # uuid is a 1.x range so Facet (gpui uuid 1.24) can unify; Cargo.lock still pins 1.11.1.
 blake3 = "=1.8.2"
 indexmap = { version = "=2.7.1", features = ["std"] }
+# 0.1.29 is rust-version 1.70, so the 1.83 pin still builds. Wall-clock
+# America/New_York for default check_at. Not a scheduler.
+jiff = "=0.1.29"
 rusqlite = { version = "=0.32.1", features = ["bundled"] }
 serde = { version = "=1.0.217", features = ["derive"] }
 # 1.0.140 unifies with pinned serde 1.0.217 (newer serde_json wants serde 1.0.220+).
