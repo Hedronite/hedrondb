@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::contracts::validate_spec_shape;
 use crate::error::{Error, Result};
+use crate::quarantine::{ManifestQuarantine, QuarantineStore};
 use crate::reconcile::{adapt_lapis_observe, reconciler_for, CURRICULUM_CLOCK_KIND};
 use crate::types::{
     content_hash, desired_state_hash, is_causal_type, reject_secrets, validate_importance,
@@ -519,6 +520,102 @@ impl Store {
         }
         Ok(docs)
     }
+}
+
+impl QuarantineStore for Store {
+    fn get(&self, row_hash: &str) -> Result<Option<ManifestQuarantine>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT row_hash, date, lanes, reason, first_seen_at, last_seen_at, cleared_at,
+                        acked_by, row_span_start, row_span_end
+                 FROM manifest_quarantine WHERE row_hash = ?1",
+                params![row_hash],
+                quarantine_from_row,
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    fn upsert(&mut self, flag: &ManifestQuarantine) -> Result<()> {
+        let lanes = serde_json::to_string(&flag.lanes)?;
+        self.conn.execute(
+            "INSERT INTO manifest_quarantine (
+                 row_hash, date, lanes, reason, first_seen_at, last_seen_at, cleared_at,
+                 acked_by, row_span_start, row_span_end
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT(row_hash) DO UPDATE SET
+                 date = excluded.date,
+                 lanes = excluded.lanes,
+                 reason = excluded.reason,
+                 first_seen_at = excluded.first_seen_at,
+                 last_seen_at = excluded.last_seen_at,
+                 cleared_at = excluded.cleared_at,
+                 acked_by = excluded.acked_by,
+                 row_span_start = excluded.row_span_start,
+                 row_span_end = excluded.row_span_end",
+            params![
+                flag.row_hash,
+                flag.date,
+                lanes,
+                flag.reason,
+                flag.first_seen_at,
+                flag.last_seen_at,
+                flag.cleared_at,
+                flag.acked_by,
+                flag.row_span[0] as i64,
+                flag.row_span[1] as i64,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn list(&self) -> Result<Vec<ManifestQuarantine>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT row_hash, date, lanes, reason, first_seen_at, last_seen_at, cleared_at,
+                    acked_by, row_span_start, row_span_end
+             FROM manifest_quarantine
+             ORDER BY first_seen_at ASC, row_hash ASC",
+        )?;
+        let rows = stmt.query_map([], quarantine_from_row)?;
+        let mut flags = Vec::new();
+        for row in rows {
+            flags.push(row?);
+        }
+        Ok(flags)
+    }
+
+    fn ack(&mut self, row_hash: &str, acked_by: &str, at: &str) -> Result<()> {
+        let n = self.conn.execute(
+            "UPDATE manifest_quarantine
+             SET acked_by = ?2, cleared_at = ?3
+             WHERE row_hash = ?1",
+            params![row_hash, acked_by, at],
+        )?;
+        if n == 0 {
+            Err(Error::NotFound("manifest quarantine"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn quarantine_from_row(row: &Row<'_>) -> rusqlite::Result<ManifestQuarantine> {
+    let lanes_raw: String = row.get(2)?;
+    let lanes: Vec<String> = serde_json::from_str(&lanes_raw).unwrap_or_default();
+    let start: i64 = row.get(8)?;
+    let end: i64 = row.get(9)?;
+    Ok(ManifestQuarantine {
+        row_hash: row.get(0)?,
+        date: row.get(1)?,
+        lanes,
+        reason: row.get(3)?,
+        first_seen_at: row.get(4)?,
+        last_seen_at: row.get(5)?,
+        cleared_at: row.get(6)?,
+        acked_by: row.get(7)?,
+        row_span: [start as usize, end as usize],
+    })
 }
 
 fn persist_desired_state_update(conn: &Connection, ds: &DesiredState) -> Result<()> {

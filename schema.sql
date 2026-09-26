@@ -50,3 +50,17 @@ CREATE TABLE IF NOT EXISTS events (
     reconciles TEXT,
     supersedes TEXT
 );
+
+-- Bad manifest rows. Hedron state only: never written to lattice.db or the manifest.
+CREATE TABLE IF NOT EXISTS manifest_quarantine (
+    row_hash TEXT PRIMARY KEY,
+    date TEXT,
+    lanes TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    cleared_at TEXT,
+    acked_by TEXT,
+    row_span_start INTEGER NOT NULL,
+    row_span_end INTEGER NOT NULL
+);

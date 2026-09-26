@@ -4,6 +4,10 @@
 //! does not trust `registered_by`. Matching requires `date=` (or the stamp's
 //! UTC date) plus `lanes=` containing the lane, or `{lane}=true`. `{lane}=false`
 //! does not match.
+//!
+//! `trio` is maghrib's dependency chain (ops / dev / cert), not its own lane.
+//! `trio=true`, a bare `trio` token, or `lanes=trio` match maghrib. An explicit
+//! `maghrib=false` still wins.
 
 use super::time::{format_unix_utc, parse_timestamp};
 
@@ -18,7 +22,12 @@ struct LogHit {
     date: String,
     lanes: Vec<String>,
     flags: Vec<(String, bool)>,
+    /// Bare `trio` token, or `kind=trio`. `trio=true/false` lives in `flags`.
+    trio_word: bool,
 }
+
+/// Maghrib is the trio chain. Register lines name that chain `trio`.
+const TRIO_LANE: &str = "maghrib";
 
 impl RegisterLog {
     pub(crate) fn parse(text: &str) -> Self {
@@ -44,7 +53,16 @@ impl LogHit {
         if let Some((_, on)) = self.flags.iter().find(|(name, _)| name == lane) {
             return *on;
         }
-        self.lanes.iter().any(|name| name == lane)
+        if self.lanes.iter().any(|name| name == lane) {
+            return true;
+        }
+        if lane != TRIO_LANE {
+            return false;
+        }
+        if let Some((_, on)) = self.flags.iter().find(|(name, _)| name == "trio") {
+            return *on;
+        }
+        self.trio_word || self.lanes.iter().any(|name| name == "trio")
     }
 }
 
@@ -66,7 +84,13 @@ fn parse_line(line: &str) -> Option<LogHit> {
     let mut date = None;
     let mut lanes = Vec::new();
     let mut flags = Vec::new();
+    let mut trio_word = false;
     while index < parts.len() {
+        if parts[index].eq_ignore_ascii_case("trio") {
+            trio_word = true;
+            index += 1;
+            continue;
+        }
         let Some((key, value)) = parts[index].split_once('=') else {
             index += 1;
             continue;
@@ -77,10 +101,23 @@ fn parse_line(line: &str) -> Option<LogHit> {
                 push_tokens(&mut lanes, value);
                 index += 1;
                 while index < parts.len() && !parts[index].contains('=') {
+                    if parts[index].eq_ignore_ascii_case("trio") {
+                        trio_word = true;
+                    }
                     push_tokens(&mut lanes, parts[index]);
                     index += 1;
                 }
                 continue;
+            }
+            "trio" => {
+                if let Some(flag) = parse_bool(value) {
+                    flags.push(("trio".to_string(), flag));
+                } else if !value.is_empty() {
+                    trio_word = true;
+                }
+            }
+            "kind" | "registration" if value.eq_ignore_ascii_case("trio") => {
+                trio_word = true;
             }
             _ => {
                 if let Some(flag) = parse_bool(value) {
@@ -102,6 +139,7 @@ fn parse_line(line: &str) -> Option<LogHit> {
         date,
         lanes,
         flags,
+        trio_word,
     })
 }
 
@@ -128,16 +166,25 @@ mod tests {
     use super::RegisterLog;
 
     #[test]
-    fn latest_match_ignores_other_lanes_and_false_flags() {
+    fn trio_reregistration_resolves_to_the_latest_line() {
         let log = RegisterLog::parse(
-            "2026-09-25T19:54Z date=2026-09-25 lanes=maghrib gate=ok ok\n\
-             2026-09-25T19:55Z date=2026-09-25 lanes=asr maghrib=False gate=ok ok\n\
-             2026-09-25T23:01Z date=2026-09-25 lanes=maghrib gate=ok ok\n\
-             2026-09-25T23:02Z date=2026-09-25 lanes=maghrib gate=ok ok\n",
+            "_tools/register.py 2026-09-25T19:54Z date=2026-09-25 trio=True ok\n\
+             _tools/register.py 2026-09-25T19:55Z date=2026-09-25 trio=True ok\n\
+             _tools/register.py 2026-09-25T23:01Z date=2026-09-25 trio=True ok\n\
+             _tools/register.py 2026-09-25T23:02Z date=2026-09-25 trio=True ok\n",
         );
-        let latest = log.latest_for("2026-09-25", "maghrib");
-        let expected = crate::source::time::parse_timestamp("2026-09-25T23:02:00Z");
-        assert_eq!(latest, expected);
+        assert_eq!(
+            log.latest_for("2026-09-25", "maghrib"),
+            crate::source::time::parse_timestamp("2026-09-25T23:02:00Z")
+        );
+    }
+
+    #[test]
+    fn explicit_maghrib_false_beats_trio() {
+        let log = RegisterLog::parse(
+            "2026-09-25T19:55Z date=2026-09-25 asr=True maghrib=False trio=True\n",
+        );
+        assert_eq!(log.latest_for("2026-09-25", "maghrib"), None);
         assert_eq!(
             log.latest_for("2026-09-25", "asr"),
             crate::source::time::parse_timestamp("2026-09-25T19:55:00Z")
