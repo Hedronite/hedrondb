@@ -154,7 +154,7 @@ fn select_states(
     let in_vault = |vault_id: &str| -> Vec<&DesiredStateView> {
         all.iter().filter(|ds| ds.vault_id == vault_id).collect()
     };
-    let wanted = |ds: &DesiredStateView| name.map_or(true, |n| ds.name == n);
+    let wanted = |ds: &DesiredStateView| name.is_none_or(|n| ds.name == n);
     let mut selected: Vec<(Option<NodeView>, DesiredStateView)> = Vec::new();
 
     let vaults: Vec<&NodeView> = rows

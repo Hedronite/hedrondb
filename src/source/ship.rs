@@ -168,6 +168,7 @@ pub fn observe_lesson_ships(
 
 /// Same pass as [`observe_lesson_ships`], with an explicit hook, flag store,
 /// and clock. `now_unix` stamps `first_seen_at` / `last_seen_at`.
+#[allow(clippy::too_many_arguments)]
 pub fn observe_lesson_ships_with(
     source: &LatticeSource,
     manifest_yaml: &str,
@@ -300,6 +301,7 @@ pub fn reconcile_lesson_ships(
 
 /// [`reconcile_lesson_ships`] with an explicit hook and clock. Flags are
 /// upserted into `store` (Hedron state), never into the lattice.
+#[allow(clippy::too_many_arguments)]
 pub fn reconcile_lesson_ships_with(
     store: &mut Store,
     token: &str,

@@ -2,32 +2,29 @@
 name = "hedron-core"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.83"
+rust-version = "1.89"
 description = "HedronDB Phase 0: desired state, causal event log, vault isolation"
 publish = false
 default-run = "hedron"
 
 [dependencies]
-# Exact pins keep the crate on rustc 1.83; newer blake3/indexmap/rusqlite need 1.85.
-# uuid is a 1.x range so Facet (gpui uuid 1.24) can unify; Cargo.lock still pins 1.11.1.
-blake3 = "=1.8.2"
-indexmap = { version = "=2.7.1", features = ["std"] }
-# 0.1.29 is rust-version 1.70, so the 1.83 pin still builds. Wall-clock
-# America/New_York for default check_at. Not a scheduler.
-jiff = "=0.1.29"
-rusqlite = { version = "=0.32.1", features = ["bundled"] }
-serde = { version = "=1.0.217", features = ["derive"] }
-# 1.0.140 unifies with pinned serde 1.0.217 (newer serde_json wants serde 1.0.220+).
-serde_json = "=1.0.140"
-serde_yaml = "=0.9.34"
+# rust-version 1.89 is the floor set by rusqlite 0.42 / libsqlite3-sys 0.40
+# (RUSTSEC-2026-0459 is fixed in libsqlite3-sys 0.39+). Caret ranges let
+# downstream workspaces unify; Cargo.lock pins the tested versions.
+blake3 = "1.8.2"
+indexmap = { version = "2.7.1", features = ["std"] }
+# Wall-clock America/New_York for default check_at. Not a scheduler.
+jiff = "0.1.29"
+rusqlite = { version = "0.42", features = ["bundled"] }
+serde = { version = "1.0.217", features = ["derive"] }
+serde_json = "1.0.140"
+serde_yaml = "0.9.34"
 uuid = { version = "1.11", features = ["serde", "v4"] }
 
 [dev-dependencies]
-# Pinned for rustc 1.83. Property tests for the lesson-ship diff.
-proptest = "=1.4.0"
-# rusty-fork (via proptest) pulls tempfile. 3.20+ drags getrandom 0.4, which
-# needs edition 2024 and will not build on this crate's rustc 1.83 pin.
-tempfile = "=3.10.1"
+# Property tests for the lesson-ship diff.
+proptest = "1.4.0"
+tempfile = "3.10.1"
 
 [[bin]]
 name = "hedron"
