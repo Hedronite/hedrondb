@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 /// Expected tables and `(column, declared type)` pairs, derived from the
 /// crate `schema.sql` embedded at compile time. Not a second handwritten list.
+#[allow(clippy::type_complexity)]
 fn expected_schema() -> &'static [(String, Vec<(String, String)>)] {
     static PARSED: OnceLock<Vec<(String, Vec<(String, String)>)>> = OnceLock::new();
     PARSED.get_or_init(|| parse_schema_sql(SCHEMA_SQL))

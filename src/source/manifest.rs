@@ -243,6 +243,7 @@ fn record_malformed(
 
 /// Split a failed row on top-level `lane:` keys. `None` when there is only
 /// one lane (nothing to salvage beside the whole row).
+#[allow(clippy::type_complexity)]
 fn recover_lane_sections(
     chunk: &str,
 ) -> Option<Vec<(String, std::result::Result<Vec<IntendedBundle>, String>)>> {

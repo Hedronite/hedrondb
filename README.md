@@ -14,7 +14,7 @@
 <p align="center">
   <a href="https://github.com/VirtualMachinist/hedrondb/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/VirtualMachinist/hedrondb/ci.yml?branch=main&style=flat&colorA=1A1A1A&colorB=2A7A84&label=ci" alt="CI"></a>
   <a href="https://github.com/VirtualMachinist/hedrondb"><img src="https://img.shields.io/badge/HedronDB-v0.1.0-C9A227?style=flat&colorA=1A1A1A" alt="HedronDB v0.1.0"></a>
-  <a href="https://rustup.rs"><img src="https://img.shields.io/badge/Rust-1.83-F46623?style=flat&colorA=1A1A1A&logo=rust&logoColor=white" alt="Rust 1.83"></a>
+  <a href="https://rustup.rs"><img src="https://img.shields.io/badge/Rust-1.89-F46623?style=flat&colorA=1A1A1A&logo=rust&logoColor=white" alt="Rust 1.89"></a>
   <a href="https://hedronite.com"><img src="https://img.shields.io/badge/Hedronite-hedronite.com-C9A227?style=flat&colorA=1A1A1A" alt="Hedronite"></a>
 </p>
 
@@ -228,7 +228,7 @@ Phase 0 is the working tree at **0.1.0**; track `main`.
 - **Jev named ask (`jev-intent` / MCP):** shadow spike. Low confidence escalates; Jev never writes rows. No weekday grind clocks.
 - **Not in this repo:** HTTP service, SQL as the query language, embeddings, a UI, or a cluster control plane.
 
-CI (`ubuntu-latest`, rustc 1.83) runs `cargo test` and a release build of `hedron`. The Python twin needs `pyyaml` (`python3 -m pip install --user pyyaml`).
+CI (`ubuntu-latest`, rustc 1.89) runs `cargo test` and a release build of `hedron`. The Python twin needs `pyyaml` (`python3 -m pip install --user pyyaml`).
 
 ## Contributing
 

@@ -15,9 +15,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # rust-version = "1.83" in Cargo.toml; do not bump blake3/uuid/indexmap.
-      - name: rustc 1.83
-        uses: dtolnay/rust-toolchain@1.83.0
+      # Matches rust-version = "1.89" in Cargo.toml (rusqlite 0.42 floor).
+      - name: rustc 1.89
+        uses: dtolnay/rust-toolchain@1.89.0
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
