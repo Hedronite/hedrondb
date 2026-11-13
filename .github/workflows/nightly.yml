@@ -17,9 +17,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Same rustc 1.83 pin as ci.yml; do not bump blake3/uuid/indexmap.
-      - name: rustc 1.83
-        uses: dtolnay/rust-toolchain@1.83.0
+      # Same rustc 1.89 pin as ci.yml (rusqlite 0.42 floor).
+      - name: rustc 1.89
+        uses: dtolnay/rust-toolchain@1.89.0
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
